@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.lovebycoma.LdMixer</id>
+  <name>lD Mixer</name>
+  <summary>Mixer and monitor control for Audient iD interfaces</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      An unofficial Linux counterpart of the Audient iD Mixer: Main, Cue A and
+      Cue B mixes, output routing, loopback, the monitor section and meters.
+      Audio keeps playing while it is connected, and no kernel module is needed.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.lovebycoma.LdMixer.desktop</launchable>
+  <url type="homepage">https://github.com/lovebycoma/ld-mixer</url>
+  <provides>
+    <modalias>usb:v2708p000Dd*</modalias>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

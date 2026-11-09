@@ -1,0 +1,57 @@
+# Fedora / RHEL-family package. Build with packaging/fedora/build-rpm.sh,
+# which creates the source tarball (with vendored crates, so the build runs
+# offline) and calls rpmbuild. Remove with: ld-mixer-uninstall (or dnf remove ld-mixer)
+
+Name:           ld-mixer
+Version:        0.1.0
+Release:        1%{?dist}
+Summary:        Unofficial mixer and monitor control for Audient iD interfaces
+License:        MIT
+URL:            https://github.com/lovebycoma/ld-mixer
+Source0:        %{name}-%{version}.tar.gz
+
+BuildRequires:  cargo
+BuildRequires:  rust
+BuildRequires:  make
+BuildRequires:  pkgconfig(gtk4)
+BuildRequires:  pkgconfig(libadwaita-1)
+BuildRequires:  pkgconfig(libusb-1.0)
+BuildRequires:  systemd-rpm-macros
+Requires:       hicolor-icon-theme
+
+%description
+lD Mixer (Linux iD Mixer) is an unofficial counterpart of the Audient iD
+Mixer: Main, Cue A and Cue B mixes, output routing, loopback, the monitor
+section and meters. Audio keeps playing while it is connected.
+
+%prep
+%autosetup -n %{name}-%{version}
+
+%build
+cargo build --release --frozen --offline
+
+%check
+cargo test --frozen --offline --lib
+
+%install
+make install DESTDIR=%{buildroot} PREFIX=/usr UDEVDIR=%{_udevrulesdir}
+# %%license below installs the license file itself.
+rm -f %{buildroot}%{_datadir}/licenses/ld-mixer/LICENSE
+
+%post
+udevadm control --reload >/dev/null 2>&1 || :
+udevadm trigger --subsystem-match=usb --attr-match=idVendor=2708 >/dev/null 2>&1 || :
+
+%postun
+udevadm control --reload >/dev/null 2>&1 || :
+
+%files
+%license LICENSE
+%{_bindir}/ld-mixer
+%{_bindir}/ld-mixer-cli
+%{_bindir}/ld-mixer-uninstall
+%{_datadir}/applications/io.github.lovebycoma.LdMixer.desktop
+%{_datadir}/icons/hicolor/scalable/apps/io.github.lovebycoma.LdMixer.svg
+%{_datadir}/metainfo/io.github.lovebycoma.LdMixer.metainfo.xml
+%{_datadir}/ld-mixer/manifest
+%{_udevrulesdir}/70-ld-mixer.rules

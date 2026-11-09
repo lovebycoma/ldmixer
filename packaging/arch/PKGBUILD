@@ -1,0 +1,48 @@
+# Maintainer: lovebycoma <chlalsrb2003@gmail.com>
+#
+# Build and install from this checkout:   makepkg -si
+# Remove everything again:                ld-mixer-uninstall   (or: sudo pacman -Rns ld-mixer)
+#
+# By default the package is built from the git checkout this PKGBUILD lives
+# in (committed changes only). Set LDMIXER_SOURCE to build from elsewhere,
+# e.g. LDMIXER_SOURCE=https://github.com/lovebycoma/ld-mixer.git makepkg -si
+
+pkgname=ld-mixer
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Unofficial mixer and monitor control for Audient iD interfaces (lD = Linux iD)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/lovebycoma/ld-mixer"
+license=('MIT')
+depends=('gtk4' 'libadwaita' 'libusb' 'glib2' 'cairo' 'pango' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
+makedepends=('cargo' 'git' 'make' 'pkgconf')
+options=('!lto')
+source=("$pkgname::git+${LDMIXER_SOURCE:-file://$(realpath "$startdir/../..")}")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  local base
+  base=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+  printf '%s.r%s.g%s' "$base" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$pkgname"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname"
+  CARGO_TARGET_DIR=target cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname"
+  cargo test --frozen --lib
+}
+
+package() {
+  cd "$pkgname"
+  make install DESTDIR="$pkgdir" PREFIX=/usr
+}

@@ -10,3 +10,9 @@ repo/
 # Added by cargo
 
 /target
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/ld-mixer/
+packaging/arch/*.pkg.tar.*
+packaging/fedora/out/
+result
