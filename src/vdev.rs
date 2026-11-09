@@ -98,9 +98,20 @@ impl Running {
         let n = spec.channels.len();
         anyhow::ensure!(n == 1 || n == 2, "a virtual device has one or two channels");
         let app_side = if n == 1 { "[MONO]" } else { "[FL FR]" };
+        let target = if spec.playback { hw.playback.as_deref() } else { hw.capture.as_deref() };
+        // The stream on the interface side must stay pinned to the hardware:
+        // effect hosts such as EasyEffects move every app stream into their
+        // own node, which here would route the device back into itself (a
+        // feedback cycle that silences everything). `node.dont-move` refuses
+        // such moves, `node.dont-fallback` forbids falling back to the
+        // default device, and the `state.*` flags keep WirePlumber from
+        // remembering anything about these short-lived streams.
         let device_side = format!(
-            "audio.position={} stream.dont-remix=true node.passive=true node.dont-reconnect=true",
-            positions("AUX", &spec.channels)
+            "audio.position={} target.object={} stream.dont-remix=true node.passive=true \
+             node.dont-reconnect=true node.dont-move=true node.dont-fallback=true \
+             state.restore-props=false state.restore-target=false",
+            positions("AUX", &spec.channels),
+            target.unwrap_or("")
         );
         let app_props = |class: &str| {
             format!(
