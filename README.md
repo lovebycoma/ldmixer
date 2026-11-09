@@ -1,376 +1,129 @@
 # lD Mixer
 
-A mixer and control panel for **Audient iD** USB audio interfaces on Linux,
-modeled on Audient's own iD Mixer app. The name is a pun:
-**lD** = **L**inux **iD**.
+An unofficial Linux replacement for Audient's iD Mixer (**lD** = **L**inux **iD**).
 
-[한국어 README](README.ko.md)
-
-- Main, Cue A and Cue B mixes, the monitor section (volume, dim, cut, alt,
-  talkback, mono, polarity), output routing, the hardware loopback, meters
-  and presets.
-- Audio keeps playing while it runs. No kernel module or driver swap.
-- Optional virtual inputs and outputs for other apps (for example a
-  "DAW 3+4" speaker just for Discord), which exist only while lD Mixer runs.
-- A background service with a tray icon, so the mix keeps working after you
-  close the window.
-
-## About this project
-
-**Purpose.** lD Mixer is meant to replace Audient's iD Mixer on Linux, and
-it is designed for the Audient iD family in general. Each model gets a
-profile; models that have not been verified on real hardware are recognized
-but not controlled, so nothing is sent to them blindly.
-
-**Tested on** (everything else is untested):
-
-| | |
-|---|---|
-| Interface | Audient **iD24**, firmware 1.12 |
-| Distribution | Artix Linux, kernel 7.3.1 (CachyOS) |
-| Audio | PipeWire 1.6.11, WirePlumber 0.5.18, EasyEffects 8.3 |
-| Desktop | niri (Wayland), quickshell tray, adw-gtk3 theme |
-| Toolkit | GTK 4.24, libadwaita 1.10, Rust 1.99 |
+- Main, Cue A and Cue B mixes, the monitor section, output routing, the hardware loopback, meters and presets.
+- Audio keeps playing; no kernel module or driver swap.
+- Optional virtual inputs and outputs per strip (for example a "DAW 3+4" speaker just for Discord), which exist only while lD Mixer runs.
+- A background service with a tray icon, so the mix keeps working after the window closes.
 
 > [!WARNING]
-> **Made with AI, not reviewed by a person.** lD Mixer was built with the
-> help of AI (roughly 90% "vibe coding") and has **not had a proper human
-> code review**. It talks to your audio interface with unofficial,
-> reverse-engineered commands. **You use it at your own risk**: the author
-> takes no responsibility for problems it causes, including to your
-> hardware, your hearing or your speakers. Keep monitor levels low when
-> trying something new. This project is not affiliated with Audient.
+> **Made with AI, not reviewed by a person.** lD Mixer was built with the help of AI (roughly 90% "vibe coding") and has **not had a proper human code review**. It talks to your interface with unofficial, reverse-engineered commands. **Use it at your own risk**: the author takes no responsibility for problems it causes, including to your hardware, your hearing or your speakers. Keep monitor levels low when trying something new. Not affiliated with Audient.
 
----
+## Supported hardware
 
-## Contents
+The goal is to support the whole Audient iD family, but the only interface I own is an iD24, so that is the only model I could build and test against. For now only the **iD24** is driven; other iD models are recognized but not controlled, so nothing is sent to them blindly. If you own another iD model and want to help verify it, please open an issue.
 
-1. [About this project](#about-this-project)
-2. [Requirements](#requirements)
-3. [Install](#install)
-4. [First start](#first-start)
-5. [What lD Mixer changes on your system](#what-ld-mixer-changes-on-your-system)
-6. [Uninstall](#uninstall)
-7. [Using lD Mixer](#using-ld-mixer)
-8. [Troubleshooting](#troubleshooting)
-9. [For developers](#for-developers)
+Tested on (everything else is untested):
 
----
+- Interface: Audient iD24, firmware 1.12
+- Distribution: Artix Linux with the CachyOS kernel
+- Audio: PipeWire, WirePlumber, EasyEffects
+- Desktop: niri (Wayland), quickshell tray, adw-gtk3 theme
 
-## Requirements
-
-| What | Version | Why |
-|------|---------|-----|
-| An Audient iD24 | | the interface being controlled |
-| Linux with GTK 4 and libadwaita | GTK ≥ 4.18, libadwaita ≥ 1.7 | the window |
-| libusb | 1.0 | talking to the interface |
-| Rust (cargo) | ≥ 1.85 (edition 2024) | building |
-| PipeWire with its command-line tools | any recent | only for virtual inputs/outputs and the loopback input |
-
-Most current distributions (Arch and derivatives, Fedora 42+, NixOS
-unstable) meet these. Older LTS releases may ship a libadwaita that is too
-old.
-
----
+Requirements: GTK ≥ 4.18, libadwaita ≥ 1.7, libusb 1.0, Rust ≥ 1.85, and the PipeWire command-line tools for virtual devices.
 
 ## Install
 
-Every method installs the **same files** (listed in
-[What lD Mixer changes](#what-ld-mixer-changes-on-your-system)) and can be
-removed with one command (see [Uninstall](#uninstall)).
-
-### 1. Get the source
-
 ```sh
-git clone https://github.com/lovebycoma/ldmixer.git
-cd ldmixer
+git clone https://github.com/lovebycoma/ldmixer.git && cd ldmixer
 ```
 
-### 2. Build and install for your distribution
-
-**Arch Linux, Manjaro, EndeavourOS, CachyOS, Artix (makepkg)**
+Arch and derivatives:
 
 ```sh
 cd packaging/arch
 makepkg -si
 ```
 
-`-s` installs the build tools it needs (cargo, make, …), `-i` installs the
-finished package with pacman. The package is built from your clone's
-committed state.
-
-**Fedora**
+Fedora:
 
 ```sh
-sudo dnf install cargo rust make rpm-build \
-    'pkgconfig(gtk4)' 'pkgconfig(libadwaita-1)' 'pkgconfig(libusb-1.0)'
+sudo dnf install cargo rust make rpm-build 'pkgconfig(gtk4)' 'pkgconfig(libadwaita-1)' 'pkgconfig(libusb-1.0)'
 packaging/fedora/build-rpm.sh
 sudo dnf install packaging/fedora/out/RPMS/*/ldmixer-*.rpm
 ```
 
-**Nix / NixOS**
+Nix:
 
 ```sh
 nix profile install .
 ```
 
-On NixOS, USB access needs the udev rule enabled in your configuration:
+On NixOS, also enable the udev rule in your configuration:
 
 ```nix
 imports = [ ldmixer.nixosModules.default ];   # ldmixer = this flake
 programs.ldmixer.enable = true;
 ```
 
-**Anything else (Debian, Ubuntu, openSUSE, …)**
-
-Install Rust, make, pkg-config and the development files for GTK 4,
-libadwaita and libusb (on Debian/Ubuntu: `libgtk-4-dev libadwaita-1-dev
-libusb-1.0-0-dev`), then:
+Anything else (on Debian/Ubuntu first install `libgtk-4-dev libadwaita-1-dev libusb-1.0-0-dev`):
 
 ```sh
 make
-sudo make install            # installs under /usr/local
+sudo make install
 ```
 
-### 3. Unplug and replug the interface (once)
+After installing, **replug the interface once** so the udev rule applies.
 
-The install adds a rule that lets your user open the interface. It applies
-to devices plugged in after it is installed, so replug the iD24 once (or
-reboot).
-
----
-
-## First start
+## Usage
 
 ```sh
-ldmixer gui
+ldmixer gui          # open the window (or use the application menu)
+ldmixer gui --mock   # try the UI without hardware
+ldmixer status       # service, interface and virtual devices
+ldmixer stop         # stop the background service
+ldmixer help         # all commands
 ```
 
-or open **lD Mixer** from your application menu.
+- The first start reads the mix the interface already has; after that lD Mixer restores its own saved mix on connect.
+- Closing the window keeps the service running in the tray. Quit from the tray, the window menu, or `ldmixer stop`.
+- Mixes: Ctrl+1/2/3 switches Main, Cue A, Cue B. Click any dB or pan readout to type a value (`-12`, `-inf`, `C`, `L30`). Right-click a strip to rename or hide it.
+- Virtual devices: press 🎤/🔈 on a strip. Inputs and the loopback need the card profile **Multichannel Duplex** or **Pro Audio**.
+- Command-line inspection (`scan`, `dump`, `snapshot`, `meters`, `watch`, `get`) only reads; writing commands need `--write`.
 
-- The first start **reads the mix the interface already has** instead of
-  overwriting it. After that, lD Mixer restores its own saved mix whenever
-  the interface is plugged in.
-- Closing the window keeps lD Mixer running in the background (tray icon).
-  To quit completely, use the tray menu's **Quit**, the window menu's
-  **Quit lD Mixer Completely**, or `ldmixer stop`.
-- For inputs and the loopback to reach other apps, set the interface's
-  PipeWire profile to **Multichannel Duplex** (or **Pro Audio**) in your
-  sound settings. Most systems already use Duplex.
+## What it changes on your system
 
-No hardware at hand? `ldmixer gui --mock` shows the whole UI with a
-simulated iD24.
+- **Installed files:** the `ldmixer` binary, a desktop entry, icon, metainfo, license, an uninstall manifest, and one udev rule.
+- **The udev rule** (`70-ldmixer.rules`) lets the user logged in at the seat open the iD24, and no other device. Linux otherwise only lets root open it:
 
----
+  ```
+  SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2708", ATTR{idProduct}=="000d", TAG+="uaccess"
+  ```
 
-## What lD Mixer changes on your system
-
-lD Mixer was built so that it **does not change system settings**. This is
-the complete list of what it adds or touches.
-
-### Files the package installs (system-wide)
-
-| Path | What it is |
-|------|------------|
-| `/usr/bin/ldmixer` | the program (the only command) |
-| `/usr/share/applications/com.lovebycoma.ldmixer.desktop` | application menu entry |
-| `/usr/share/icons/hicolor/scalable/apps/com.lovebycoma.ldmixer.svg` | icon |
-| `/usr/share/metainfo/com.lovebycoma.ldmixer.metainfo.xml` | app description for software centers |
-| `/usr/share/licenses/ldmixer/LICENSE` | license |
-| `/usr/share/ldmixer/manifest` | list of these files, used by the uninstaller |
-| `/usr/lib/udev/rules.d/70-ldmixer.rules` | **the only rule that affects the system**, see below |
-
-With `sudo make install` the same files go under `/usr/local`, and the udev
-rule goes to `/etc/udev/rules.d/`.
-
-**The udev rule.** Linux only lets root open USB devices by default. This
-one-line rule gives the user logged in at the computer access to devices
-from Audient (USB vendor `2708`) and nothing else:
-
-```
-SUBSYSTEM=="usb", ATTRS{idVendor}=="2708", TAG+="uaccess"
-```
-
-The package manager reloads udev when the rule is installed or removed.
-
-### Files lD Mixer creates in your home folder
-
-| Path | What it is |
-|------|------------|
-| `~/.config/ldmixer/iD24.json` | your mix (faders, routing, names, …) |
-| `~/.config/ldmixer/settings.json` | app settings (for example the loopback input) |
-| `~/.config/ldmixer/presets/` | presets you save |
-| `~/.local/state/ldmixer/daemon.log` | background service log |
-
-### Only while lD Mixer runs (gone when it stops)
-
-| What | Details |
-|------|---------|
-| Background service `ldmixer daemon` | holds the USB connection, shows the tray icon |
-| `$XDG_RUNTIME_DIR/ldmixer.sock` | local socket the window and commands use to reach the service (`/run/user/<uid>/`, readable only by you) |
-| Virtual devices | each is a `pw-loopback` process; the device disappears with the process. **No PipeWire or WirePlumber configuration is written.** |
-
-### On the interface itself
-
-lD Mixer sends the interface its mix, routing and monitor settings over
-USB, just as Audient's app does. **The interface keeps them** until they
-are changed again, and some, such as output routing, survive a power cycle.
-Uninstalling lD Mixer does not change them back. To return the mixer to
-lD Mixer's defaults first, use **Menu → Reset Mixer…** (only DAW 1+2 plays).
-
-### Never touched
-
-PipeWire, WirePlumber and ALSA configuration, the sample rate and the
-quantum (only displayed), your default input and output devices, kernel
-modules, user groups and system services.
-
----
+- **Your home folder:** `~/.config/ldmixer/` (mix, settings, presets) and `~/.local/state/ldmixer/daemon.log`.
+- **While running:** the background service, a socket in `$XDG_RUNTIME_DIR`, and one `pw-loopback` process per virtual device.
+- **The interface** keeps the mix and routing it was sent, even after a power cycle. Use **Menu → Reset Mixer…** before uninstalling if you want defaults back.
+- **Never touched:** PipeWire, WirePlumber and ALSA configuration, sample rate and quantum, default devices, kernel modules, groups, system services.
 
 ## Uninstall
 
-One command removes lD Mixer however it was installed:
-
 ```sh
-ldmixer uninstall
+ldmixer uninstall    # -y skips the prompt, --keep-user-data keeps ~/.config/ldmixer
 ```
 
-It shows what it will remove and asks before doing anything (`-y` skips the
-question, `--keep-user-data` keeps your settings).
-
-**What it removes**
-
-1. Stops the background service, which also removes all virtual devices.
-2. Deletes your lD Mixer files: `~/.config/ldmixer/`,
-   `~/.local/state/ldmixer/`, `~/.cache/ldmixer/` and an autostart entry if
-   one exists.
-3. Removes the program through whatever installed it:
-   `pacman -Rns ldmixer`, `dnf remove ldmixer`,
-   `nix profile remove ldmixer`, or the files listed in the manifest for
-   `make install`. This also deletes the udev rule and reloads udev.
-
-It asks for your password for step 3.
-
-**What stays (and how to remove it)**
-
-| Left behind | How to remove it |
-|-------------|------------------|
-| Settings stored **in the interface** | run **Reset Mixer** before uninstalling, or reconfigure it with any other tool |
-| The `ldmixer` folder you cloned | delete it: `rm -rf ldmixer` |
-| Build tools installed by `makepkg -s` or `dnf install` (cargo, …) | remove them with your package manager if you do not need them |
-| On NixOS, the `programs.ldmixer` lines | remove them from your configuration and rebuild |
-
-The per-distribution commands (`sudo pacman -Rns ldmixer`,
-`sudo dnf remove ldmixer`, `nix profile remove ldmixer`,
-`sudo make uninstall`) also work, but they leave `~/.config/ldmixer/` in
-place.
-
----
-
-## Using lD Mixer
-
-### The window
-
-```
-┌───────────────────────── channel strips ─────────────────────────┬── Mixes ──┬─ Monitor ─┐
-│ Mic 1 │ Mic 2 │ Digi 1+2 │ … │ DAW 1+2 │ DAW 3+4 │ DAW 5+6       │ Main Mix  │ volume    │
-│ Ø 🔗 🎤                                                          │ Cue A     │ DIM CUT … │
-│ M S                                                              │ Cue B     │ outputs   │
-│ pan                                                              │ (knob)    │ system    │
-│ -12.0 dB                                                         │           │           │
-│ meter │ fader                                                    │           │           │
-└──────────────────────────────────────────────────────────────────┴───────────┴───────────┘
-```
-
-- **Mixes.** Open Main, Cue A or Cue B (or press Ctrl+1/2/3); the strips
-  then show that mix. The open mix has its master level as a knob, shows
-  which outputs play it, and can be renamed with the pencil.
-- **Strips**, top to bottom:
-  - **Ø** polarity (mic inputs), **🔗** link two channels as a stereo pair,
-    **🎤/🔈** offer the strip to other apps as its own input or output
-  - **M / S** mute and solo in the current mix
-  - **pan**: a linked pair has one per channel (L100 / R100 when linked,
-    both centered when unlinked)
-  - **level** and **meter + fader**
-- **Typing values.** Click any dB or pan number and type: `-12`,
-  `-6.5 dB`, `-inf`, `C`, `L30`, `R45`.
-- **Right-click a strip** to rename or hide it. Hidden strips come back from
-  **Menu → Hidden Channels**. Hiding does not change the sound.
-- **Monitor column.** Monitor volume and buttons follow the front panel.
-  **Outputs** picks what each output plays (main mix, a cue, a DAW pair) and
-  what goes to the **loopback**. **System** shows the device, sample rate and
-  PipeWire quantum, and sets the optical ports to ADAT or S/PDIF.
-- **Presets** are in the main menu.
-
-### Virtual inputs and outputs for other apps
-
-PipeWire shows the iD24 as one 16-channel output and one 12-channel input,
-which most apps cannot use channel by channel. Press **🎤/🔈** on a strip and
-lD Mixer adds a separate device while it runs:
-
-- **Mic / Digi strips** become inputs, for example "iD24 Mic 1".
-- **DAW strips** become outputs, for example "iD24 DAW 3+4".
-- A linked strip becomes one stereo device, an unlinked strip a mono one.
-- A renamed strip keeps its name ("iD24 Discord").
-- **Loopback as App Input** (Outputs section) adds "iD24 Loopback".
-
-Pick these devices in each app, or in your sound settings to make one the
-system default. lD Mixer never changes your default device itself.
-
-### Background service and tray
-
-```sh
-ldmixer start      # start the background service
-ldmixer status     # service, interface and virtual devices
-ldmixer stop       # stop it (virtual devices disappear)
-ldmixer daemon     # run it in the foreground, e.g. from an autostart entry
-```
-
-The tray icon opens the window and has Dim, Cut, Alt, Mono, Talkback and
-Quit. It needs a tray (KDE Plasma, most panels, Waybar; on GNOME the
-AppIndicator extension). Without one, everything else still works.
-
-### Command line
-
-`ldmixer help` lists everything. Inspection commands only read:
-`scan`, `dump`, `snapshot <file>`, `meters`, `watch`, `get`. Commands that
-write (`restore`, `route`, `cell`, `monitor`, `level`) need `--write`. While
-the service runs, they go through it.
-
----
+It stops the service, deletes lD Mixer's files in your home folder, and removes the package through pacman, dnf, Nix or the `make install` manifest (including the udev rule). Left behind: settings stored in the interface, your clone, build tools, and on NixOS the `programs.ldmixer` line.
 
 ## Troubleshooting
 
-| Symptom | What to check |
-|---------|---------------|
-| "permission denied opening the iD24" | Replug the interface once after installing. On NixOS enable `programs.ldmixer`. |
-| "the iD24 is in use by another program" | Another lD Mixer or BiD/Monix/MixiD instance holds it; `ldmixer status`, `ldmixer stop`. |
-| No sound | The interface's front volume knob; the strip's fader and the mix master; **Outputs** routes your speakers to the right mix; the app plays to the iD24 (or to the virtual device you picked). |
-| A virtual input shows an error | Set the card's profile to Multichannel Duplex or Pro Audio; make sure `pw-loopback` and `pw-dump` are installed (PipeWire tools). |
-| No tray icon | Your desktop has no tray host; use `ldmixer gui` and `ldmixer stop`. |
-| Something else | `~/.local/state/ldmixer/daemon.log`, or run `ldmixer daemon` in a terminal. |
+- **"permission denied opening the iD24":** replug the interface after installing; on NixOS enable `programs.ldmixer`.
+- **"in use by another program":** another lD Mixer, BiD, Monix or MixiD instance holds it; check `ldmixer status`.
+- **No sound:** the front-panel volume knob first, then faders, the mix master and **Outputs** routing.
+- **Virtual input error:** set the card profile to Multichannel Duplex or Pro Audio, and install `pw-loopback` and `pw-dump`.
+- **Anything else:** read `~/.local/state/ldmixer/daemon.log`, or run `ldmixer daemon` in a terminal.
 
----
+## Development
 
-## For developers
-
-```sh
-cargo build                   # debug build
-cargo test                    # unit tests
-cargo test --test vdev_live -- --ignored   # live PipeWire test (needs an iD interface)
-cargo run -- gui --mock       # UI against a simulated iD24
-```
-
-- [docs/PROTOCOL.md](docs/PROTOCOL.md): the USB protocol and what was
-  measured on hardware.
-- [AGENTS.md](AGENTS.md): architecture, conventions and project rules.
+`cargo test`, `cargo run -- gui --mock`. See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the USB protocol and [AGENTS.md](AGENTS.md) for architecture and project rules.
 
 ## Credits
 
-The protocol knowledge builds on
-[MixiD](https://github.com/TheOnlyJoey/MixiD),
-[BiD](https://github.com/baakhoff/BiD),
-[Monix](https://github.com/sKuhLight/monix) and
-[audient-id24-dkms](https://github.com/Magnetar-OS/audient-id24-dkms).
+lD Mixer would not exist without these open-source projects, whose developers worked out Audient's undocumented USB protocol and shared their findings. A big thank you to all of them:
+
+- [MixiD](https://github.com/TheOnlyJoey/MixiD)
+- [BiD](https://github.com/baakhoff/BiD)
+- [Monix](https://github.com/sKuhLight/monix)
+- [audient-id24-dkms](https://github.com/Magnetar-OS/audient-id24-dkms)
 
 ## License
 
