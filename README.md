@@ -116,6 +116,10 @@ It stops the service, deletes lD Mixer's files in your home folder, and removes 
 
 `cargo test`, `cargo run -- gui --mock`. See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the USB protocol and [AGENTS.md](AGENTS.md) for architecture and project rules.
 
+## Issues and pull requests
+
+Issues and pull requests are open, but this is a personal side project and I do not want to put a lot of time into it. I may not have time to look after them, so replies and merges can be slow, or may not happen at all.
+
 ## Credits
 
 lD Mixer would not exist without these open-source projects, whose developers worked out Audient's undocumented USB protocol and shared their findings. A big thank you to all of them:
