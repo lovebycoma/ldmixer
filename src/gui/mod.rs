@@ -80,8 +80,8 @@ button.phase:checked { background-color: #3b82f6; color: white; }
 button.link-toggle:checked { background-color: #64748b; color: white; }
 button.vdev:checked { background-color: #0ea5e9; color: white; }
 editablelabel.value { min-width: 0; }
-editablelabel.value text { font-size: 0.75em; }
-editablelabel.monitor-volume text { font-size: 1em; }
+/* The edit field keeps the label's font and drops theme padding, which clipped the text's top. */
+editablelabel > stack > text { font-size: 1em; padding: 0 2px; margin: 0; min-height: 0; }
 button.monitor-toggle { min-height: 34px; font-weight: 800; font-size: 0.85em; }
 button.monitor-toggle:checked { background-color: #e5e7eb; color: #111; }
 button.monitor-toggle.cut:checked { background-color: #dc2626; color: white; }
@@ -790,10 +790,11 @@ impl App {
         sub.add_css_class("strip-sub");
 
         // Phase and link buttons.
+        // Button rows fill the strip; buttons share the width equally.
         let tools = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
-            .halign(gtk::Align::Center)
+            .homogeneous(true)
             .build();
         let phase_inputs = self.profile.phase_inputs as usize;
         if node < phase_inputs {
@@ -915,7 +916,7 @@ impl App {
         let ms = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(4)
-            .halign(gtk::Align::Center)
+            .homogeneous(true)
             .build();
         let mute = gtk::ToggleButton::with_label("M");
         mute.add_css_class("tiny");
@@ -954,7 +955,7 @@ impl App {
             .orientation(gtk::Orientation::Vertical)
             .spacing(6)
             .margin_top(6)
-            .margin_bottom(8)
+            .margin_bottom(18)
             .margin_start(4)
             .margin_end(4)
             .vexpand(true)
