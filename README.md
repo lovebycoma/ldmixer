@@ -3,7 +3,7 @@
 An unofficial Linux replacement for Audient's iD Mixer (**lD** = **L**inux **iD**).
 
 - Main, Cue A and Cue B mixes, the monitor section, output routing, the hardware loopback, meters and presets.
-- Audio keeps playing; no kernel module or driver swap.
+- Audio keeps playing, with no kernel module or driver swap.
 - Optional virtual inputs and outputs per strip (for example a "DAW 3+4" speaker just for Discord), which exist only while lD Mixer runs.
 - A background service with a tray icon, so the mix keeps working after the window closes.
 
@@ -12,7 +12,7 @@ An unofficial Linux replacement for Audient's iD Mixer (**lD** = **L**inux **iD*
 
 ## Supported hardware
 
-The goal is to support the whole Audient iD family, but the only interface I own is an iD24, so that is the only model I could build and test against. For now only the **iD24** is driven; other iD models are recognized but not controlled, so nothing is sent to them blindly. If you own another iD model and want to help verify it, please open an issue.
+The goal is to support the whole Audient iD family, but the only interface I own is an iD24, so that is the only model I could build and test against. For now only the **iD24** is driven. Other iD models are recognized but not controlled, so nothing is sent to them blindly. If you own another iD model and want to help verify it, please open an issue.
 
 Tested on (everything else is untested):
 
@@ -76,11 +76,11 @@ ldmixer stop         # stop the background service
 ldmixer help         # all commands
 ```
 
-- The first start reads the mix the interface already has; after that lD Mixer restores its own saved mix on connect.
+- The first start reads the mix the interface already has. After that, lD Mixer restores its own saved mix on connect.
 - Closing the window keeps the service running in the tray. Quit from the tray, the window menu, or `ldmixer stop`.
 - Mixes: Ctrl+1/2/3 switches Main, Cue A, Cue B. Click any dB or pan readout to type a value (`-12`, `-inf`, `C`, `L30`). Right-click a strip to rename or hide it.
 - Virtual devices: press 🎤/🔈 on a strip. Inputs and the loopback need the card profile **Multichannel Duplex** or **Pro Audio**.
-- Command-line inspection (`scan`, `dump`, `snapshot`, `meters`, `watch`, `get`) only reads; writing commands need `--write`.
+- Command-line inspection (`scan`, `dump`, `snapshot`, `meters`, `watch`, `get`) only reads. Writing commands need `--write`.
 
 ## What it changes on your system
 
@@ -106,8 +106,8 @@ It stops the service, deletes lD Mixer's files in your home folder, and removes 
 
 ## Troubleshooting
 
-- **"permission denied opening the iD24":** replug the interface after installing; on NixOS enable `programs.ldmixer`.
-- **"in use by another program":** another lD Mixer, BiD, Monix or MixiD instance holds it; check `ldmixer status`.
+- **"permission denied opening the iD24":** replug the interface after installing. On NixOS, enable `programs.ldmixer`.
+- **"in use by another program":** another lD Mixer, BiD, Monix or MixiD instance holds it. Check `ldmixer status`.
 - **No sound:** the front-panel volume knob first, then faders, the mix master and **Outputs** routing.
 - **Virtual input error:** set the card profile to Multichannel Duplex or Pro Audio, and install `pw-loopback` and `pw-dump`.
 - **Anything else:** read `~/.local/state/ldmixer/daemon.log`, or run `ldmixer daemon` in a terminal.
