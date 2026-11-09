@@ -1,5 +1,7 @@
 # lD Mixer
 
+![lD Mixer next to pavucontrol showing its virtual output devices](docs/screenshots/main.avif)
+
 An unofficial Linux replacement for Audient's iD Mixer (**lD** = **L**inux **iD**).
 
 - Main, Cue A and Cue B mixes, the monitor section, output routing, the hardware loopback, meters and presets.
