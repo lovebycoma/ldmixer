@@ -1,6 +1,7 @@
-# lD Mixer: let the user logged in at the seat open Audient iD interfaces.
+# lD Mixer: let the user logged in at the seat open the Audient iD models lD Mixer drives.
+# One line per supported model (product IDs from PROFILES in src/protocol.rs; a unit test keeps them in sync).
 # Install with:
 #   sudo install -m644 70-ldmixer.rules /etc/udev/rules.d/
 #   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=2708
 # The file name must sort before 73-seat-late.rules for "uaccess" to apply.
-SUBSYSTEM=="usb", ATTRS{idVendor}=="2708", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2708", ATTR{idProduct}=="000d", TAG+="uaccess"

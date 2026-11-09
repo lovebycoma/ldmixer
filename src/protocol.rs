@@ -487,4 +487,23 @@ mod tests {
         assert_eq!(mixer_cell(1, Bus::CueA, 1), 9);
         assert_eq!(mixer_cell(15, Bus::CueB, 1), 95);
     }
+
+    /// The udev rule grants access to exactly the models lD Mixer drives.
+    #[test]
+    fn udev_rule_matches_profiles() {
+        let rules = include_str!("../data/70-ldmixer.rules");
+        let mut in_rule: Vec<u16> = rules
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && l.contains("uaccess"))
+            .map(|l| {
+                assert!(l.contains(&format!("ATTR{{idVendor}}==\"{:04x}\"", VENDOR_ID)), "{l}");
+                let id = l.split("ATTR{idProduct}==\"").nth(1).expect("idProduct in rule");
+                u16::from_str_radix(&id[..4], 16).unwrap()
+            })
+            .collect();
+        let mut driven: Vec<u16> = PROFILES.iter().map(|p| p.product_id).collect();
+        in_rule.sort();
+        driven.sort();
+        assert_eq!(in_rule, driven);
+    }
 }
