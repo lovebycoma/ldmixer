@@ -1,7 +1,7 @@
 # Maintainer: lovebycoma <chlalsrb2003@gmail.com>
 #
 # Build and install from this checkout:   makepkg -si
-# Remove everything again:                ld-mixer-uninstall   (or: sudo pacman -Rns ld-mixer)
+# Remove everything again:                ld-mixer uninstall    (or: sudo pacman -Rns ld-mixer)
 #
 # By default the package is built from the git checkout this PKGBUILD lives
 # in (committed changes only). Set LDMIXER_SOURCE to build from elsewhere,

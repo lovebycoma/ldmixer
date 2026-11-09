@@ -1,4 +1,4 @@
-//! `ld-mixer-cli`: inspection and experiment tool for Audient iD devices.
+//! Command-line subcommands of `ld-mixer`: inspection and experiments.
 //!
 //! Read-only commands (`scan`, `dump`, `snapshot`, `meters`, `watch`) never
 //! write to the device. Commands that write (`restore`, `route`, `cell`,
@@ -9,14 +9,12 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use ld_mixer::device::{self, Device};
+use ld_mixer::device::{self, ControlIo};
 use ld_mixer::protocol::{self, entity, monitor, MIXER_STRIDE};
 use serde::{Deserialize, Serialize};
 
-const USAGE: &str = "\
-ld-mixer-cli: inspect and experiment with Audient iD interfaces
-
-Read-only:
+pub const USAGE: &str = "\
+Device commands, read-only:
   scan                       list Audient devices on the bus
   dump                       read every known readable control
   snapshot <file.json>       save routing, matrix and monitor state to a file
@@ -60,8 +58,14 @@ fn parse_num(s: &str) -> Result<i64> {
     Ok(v)
 }
 
-fn main() -> Result<()> {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
+type Device = dyn ControlIo;
+
+fn open(mock: bool) -> Result<Box<Device>> {
+    device::open(mock)
+}
+
+/// Run a device subcommand. `args[0]` is the command name.
+pub fn run(mut args: Vec<String>, mock: bool) -> Result<()> {
     let write = if let Some(i) = args.iter().position(|a| a == "--write") {
         args.remove(i);
         true
@@ -79,10 +83,10 @@ fn main() -> Result<()> {
     }
     match cmd.as_str() {
         "scan" => scan(),
-        "dump" => dump(&Device::open()?),
+        "dump" => dump(&*open(mock)?),
         "snapshot" => {
             let path = rest.first().context("snapshot needs a file name")?;
-            let snap = take_snapshot(&Device::open()?);
+            let snap = take_snapshot(&*open(mock)?);
             std::fs::write(path, serde_json::to_string_pretty(&snap)?)?;
             println!(
                 "saved {} routing, {} matrix, {} monitor values to {path}",
@@ -95,18 +99,18 @@ fn main() -> Result<()> {
         "restore" => {
             let path = rest.first().context("restore needs a file name")?;
             let snap: Snapshot = serde_json::from_str(&std::fs::read_to_string(path)?)?;
-            restore(&Device::open()?, &snap)
+            restore(&*open(mock)?, &snap)
         }
         "meters" => {
             let off = rest.first().map(|s| parse_num(s)).transpose()?.unwrap_or(0) as u16;
             let len = rest.get(1).map(|s| parse_num(s)).transpose()?.unwrap_or(32) as usize;
-            meters(&Device::open()?, off, len)
+            meters(&*open(mock)?, off, len)
         }
-        "watch" => watch(&Device::open()?),
+        "watch" => watch(&*open(mock)?),
         "route" => {
             let out = parse_num(rest.first().context("route <out> <code>")?)? as u8;
             let code = parse_num(rest.get(1).context("route <out> <code>")?)? as u8;
-            let d = Device::open()?;
+            let d = open(mock)?;
             d.set_route(out, code)?;
             println!("output {out} <- code {code:#04x}");
             Ok(())
@@ -115,7 +119,7 @@ fn main() -> Result<()> {
             let cell = parse_num(rest.first().context("cell <n> <dB|mute>")?)? as usize;
             let v = rest.get(1).context("cell <n> <dB|mute>")?;
             let db = if v == "mute" { None } else { Some(v.parse::<f32>()?) };
-            let d = Device::open()?;
+            let d = open(mock)?;
             d.set_mixer_cell(cell, protocol::db_to_raw(db))?;
             println!("cell {cell} <- {}", protocol::format_db(db));
             Ok(())
@@ -123,14 +127,11 @@ fn main() -> Result<()> {
         "monitor" => {
             let sel = parse_num(rest.first().context("monitor <selector> <value>")?)? as u8;
             let v = parse_num(rest.get(1).context("monitor <selector> <value>")?)? as u8;
-            Device::open()?.set_u8(entity::MONITOR, sel, 0, v)?;
+            open(mock)?.set_u8(entity::MONITOR, sel, 0, v)?;
             println!("monitor selector {sel:#04x} <- {v}");
             Ok(())
         }
-        _ => {
-            print!("{USAGE}");
-            bail!("unknown command `{cmd}`")
-        }
+        _ => bail!("unknown command `{cmd}`; see `ld-mixer help`"),
     }
 }
 
@@ -160,12 +161,14 @@ fn show<T: std::fmt::Display>(label: &str, r: Result<T>) {
 }
 
 fn dump(d: &Device) -> Result<()> {
+    let info = d.info();
     println!(
-        "{} on interface {}, firmware {:#06x}, serial {}",
-        d.profile.name,
-        d.interface(),
-        d.firmware,
-        d.serial.as_deref().unwrap_or("?")
+        "{} on interface {}, firmware {:#06x}, serial {}{}",
+        info.profile.name,
+        info.interface,
+        info.firmware,
+        info.serial.as_deref().unwrap_or("?"),
+        if info.mock { " (mock)" } else { "" }
     );
     println!("system:");
     show("sample rate", d.sample_rate().map(|v| format!("{v} Hz")));
@@ -183,17 +186,17 @@ fn dump(d: &Device) -> Result<()> {
         );
     }
     println!("routing (output: code -> source):");
-    for out in 0..d.profile.routing_outputs {
+    for out in 0..d.profile().routing_outputs {
         show(
             &format!("out {out:2}"),
             d.get_route(out).map(|c| {
-                let src = protocol::route_source_from_code(d.profile.route_scheme, c);
+                let src = protocol::route_source_from_code(d.profile().route_scheme, c);
                 format!("{c:#04x} {}", src.map(|s| s.label()).unwrap_or_else(|| "?".into()))
             }),
         );
     }
     println!("matrix (dB; rows = nodes, columns = MainL MainR CueAL CueAR CueBL CueBR):");
-    for (i, node) in d.profile.nodes.iter().enumerate() {
+    for (i, node) in d.profile().nodes.iter().enumerate() {
         let cells: Vec<String> = (0..MIXER_STRIDE)
             .map(|c| match d.get_mixer_cell(i * MIXER_STRIDE + c) {
                 Ok(r) => match protocol::raw_to_db(r) {
@@ -215,13 +218,13 @@ fn hex(b: &[u8]) -> String {
 }
 
 fn take_snapshot(d: &Device) -> Snapshot {
-    let mut s = Snapshot { model: d.profile.name.into(), ..Default::default() };
-    for out in 0..d.profile.routing_outputs {
+    let mut s = Snapshot { model: d.profile().name.into(), ..Default::default() };
+    for out in 0..d.profile().routing_outputs {
         if let Ok(c) = d.get_route(out) {
             s.routing.insert(out, c);
         }
     }
-    for cell in 0..d.profile.nodes.len() * MIXER_STRIDE {
+    for cell in 0..d.profile().nodes.len() * MIXER_STRIDE {
         if let Ok(v) = d.get_mixer_cell(cell) {
             s.matrix.insert(cell, v);
         }
@@ -240,8 +243,8 @@ fn take_snapshot(d: &Device) -> Snapshot {
 }
 
 fn restore(d: &Device, s: &Snapshot) -> Result<()> {
-    if s.model != d.profile.name {
-        bail!("snapshot is for {}, device is {}", s.model, d.profile.name);
+    if s.model != d.profile().name {
+        bail!("snapshot is for {}, device is {}", s.model, d.profile().name);
     }
     let mut errors = 0;
     for (out, code) in &s.routing {

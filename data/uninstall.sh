@@ -1,5 +1,8 @@
 #!/bin/sh
-# ld-mixer-uninstall: remove lD Mixer and everything it created, in one go.
+# `ld-mixer uninstall`: remove lD Mixer and everything it created, in one go.
+#
+# This script is embedded in the ld-mixer binary and run through `sh -c`;
+# the binary passes its own path in LDMIXER_SELF.
 #
 #   1. Per-user data of the calling user: settings, presets, state, cache.
 #   2. The installed program itself, through whatever installed it:
@@ -17,7 +20,11 @@ for arg in "$@"; do
     case "$arg" in
         -y|--yes) assume_yes=1 ;;
         --keep-user-data) keep_user=1 ;;
-        -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)
+            echo "usage: ld-mixer uninstall [-y|--yes] [--keep-user-data]"
+            echo "Removes the lD Mixer package (pacman, dnf/rpm, Nix or a manual install)"
+            echo "and your lD Mixer settings and presets."
+            exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -37,7 +44,7 @@ fi
 user_paths="$config_home/ld-mixer $state_home/ld-mixer $cache_home/ld-mixer \
 $config_home/autostart/io.github.lovebycoma.LdMixer.desktop"
 
-self=$(readlink -f "$0")
+self=$(readlink -f "${LDMIXER_SELF:-$0}")
 as_root() {
     if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
 }
@@ -70,8 +77,9 @@ if [ "$assume_yes" -eq 0 ]; then
     case "$answer" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
 fi
 
-# Stop a running instance so nothing holds the device or rewrites settings.
-pkill -x ld-mixer 2>/dev/null || true
+# Stop a running GUI so nothing holds the device or rewrites settings. The
+# bracket keeps this pattern from matching this very script's command line.
+pkill -f 'ld-mixe[r] gui' 2>/dev/null || true
 
 if [ "$keep_user" -eq 0 ]; then
     for p in $user_paths; do

@@ -1,6 +1,6 @@
 # Fedora / RHEL-family package. Build with packaging/fedora/build-rpm.sh,
 # which creates the source tarball (with vendored crates, so the build runs
-# offline) and calls rpmbuild. Remove with: ld-mixer-uninstall (or dnf remove ld-mixer)
+# offline) and calls rpmbuild. Remove with: ld-mixer uninstall (or dnf remove ld-mixer)
 
 # Rust release builds carry no debug info, so there is nothing to split out.
 %global debug_package %{nil}
@@ -52,8 +52,6 @@ udevadm control --reload >/dev/null 2>&1 || :
 %files
 %license LICENSE
 %{_bindir}/ld-mixer
-%{_bindir}/ld-mixer-cli
-%{_bindir}/ld-mixer-uninstall
 %{_datadir}/applications/io.github.lovebycoma.LdMixer.desktop
 %{_datadir}/icons/hicolor/scalable/apps/io.github.lovebycoma.LdMixer.svg
 %{_datadir}/metainfo/io.github.lovebycoma.LdMixer.metainfo.xml

@@ -357,6 +357,16 @@ const ID24_LINE_SOURCES: &[RouteSource] = &[
     RouteSource::Daw(2),
     RouteSource::Daw(4),
 ];
+/// The optical output carries DAW 9+10 (its own playback pair) by default.
+const ID24_OPTICAL_SOURCES: &[RouteSource] = &[
+    RouteSource::Daw(8),
+    RouteSource::Main,
+    RouteSource::CueA,
+    RouteSource::CueB,
+    RouteSource::Daw(0),
+    RouteSource::Daw(2),
+    RouteSource::Daw(4),
+];
 const ID24_LOOPBACK_SOURCES: &[RouteSource] = &[
     RouteSource::Main,
     RouteSource::CueA,
@@ -371,7 +381,7 @@ const ID24_OUTPUTS: &[OutputPair] = &[
     OutputPair { name: "Speakers (Out 1+2)", first: 0, sources: ID24_SPEAKER_SOURCES, default: RouteSource::Main },
     OutputPair { name: "Line (Out 3+4)", first: 2, sources: ID24_LINE_SOURCES, default: RouteSource::Alt },
     OutputPair { name: "Headphones", first: 4, sources: ID24_SPEAKER_SOURCES, default: RouteSource::CueA },
-    OutputPair { name: "Optical 1+2", first: 8, sources: ID24_LINE_SOURCES, default: RouteSource::Daw(8) },
+    OutputPair { name: "Optical 1+2", first: 8, sources: ID24_OPTICAL_SOURCES, default: RouteSource::Daw(8) },
     OutputPair { name: "Loopback", first: 10, sources: ID24_LOOPBACK_SOURCES, default: RouteSource::Main },
 ];
 
@@ -449,6 +459,15 @@ mod tests {
         assert_eq!(route_code(s, 11, RouteSource::Daw(6)), Some(7));
         assert_eq!(route_source_from_code(s, 0x1f), Some(RouteSource::CueA));
         assert_eq!(route_source_from_code(s, 0x07), Some(RouteSource::Daw(6)));
+    }
+
+    #[test]
+    fn output_defaults_are_offered() {
+        for p in PROFILES {
+            for o in p.outputs {
+                assert!(o.sources.contains(&o.default), "{} {}", p.name, o.name);
+            }
+        }
     }
 
     #[test]

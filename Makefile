@@ -7,7 +7,7 @@
 # Set NO_UDEV_RELOAD=1 to skip reloading udev after a manual install.
 #
 # A manual install (`sudo make install`) records what it installed in
-# $(PREFIX)/share/ld-mixer/manifest, which `ld-mixer-uninstall` or
+# $(PREFIX)/share/ld-mixer/manifest, which `ld-mixer uninstall` or
 # `sudo make uninstall` use to remove everything.
 
 PREFIX   ?= /usr/local
@@ -26,8 +26,6 @@ APPID    := io.github.lovebycoma.LdMixer
 
 FILES := \
 	$(BINDIR)/ld-mixer \
-	$(BINDIR)/ld-mixer-cli \
-	$(BINDIR)/ld-mixer-uninstall \
 	$(DATADIR)/applications/$(APPID).desktop \
 	$(DATADIR)/icons/hicolor/scalable/apps/$(APPID).svg \
 	$(DATADIR)/metainfo/$(APPID).metainfo.xml \
@@ -47,8 +45,6 @@ check:
 
 install:
 	install -Dm755 $(TARGET)/ld-mixer        "$(DESTDIR)$(BINDIR)/ld-mixer"
-	install -Dm755 $(TARGET)/ld-mixer-cli    "$(DESTDIR)$(BINDIR)/ld-mixer-cli"
-	install -Dm755 data/ld-mixer-uninstall   "$(DESTDIR)$(BINDIR)/ld-mixer-uninstall"
 	install -Dm644 data/$(APPID).desktop      "$(DESTDIR)$(DATADIR)/applications/$(APPID).desktop"
 	install -Dm644 data/$(APPID).svg          "$(DESTDIR)$(DATADIR)/icons/hicolor/scalable/apps/$(APPID).svg"
 	install -Dm644 data/$(APPID).metainfo.xml "$(DESTDIR)$(DATADIR)/metainfo/$(APPID).metainfo.xml"

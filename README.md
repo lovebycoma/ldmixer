@@ -14,9 +14,8 @@ Work in progress. Developed and tested first on an Audient iD24.
 
 ## Install
 
-Every package installs the same files: `ld-mixer` (GUI), `ld-mixer-cli`
-(inspection tool), `ld-mixer-uninstall`, a desktop entry, an icon and the
-udev rule `70-ld-mixer.rules`.
+Every package installs the same files: the `ld-mixer` command, a desktop
+entry, an icon and the udev rule `70-ld-mixer.rules`.
 
 **Arch Linux and derivatives (makepkg)**
 
@@ -55,6 +54,30 @@ make
 sudo make install            # PREFIX=/usr/local by default
 ```
 
+## Usage
+
+```sh
+ld-mixer gui                 # open the mixer (also in your application menu)
+ld-mixer gui --mock          # try the UI with a simulated iD24, no hardware needed
+ld-mixer help                # all commands
+```
+
+The window mirrors the official iD Mixer: pick **Main**, **Cue A** or
+**Cue B** in the header (Ctrl+1/2/3), and the strips show that mix's
+faders, pan, mute and solo. LINK pairs two channels into a stereo strip,
+double-click a strip name to rename it, and double-click a fader or knob to
+reset it. The side panel holds the monitor section (it follows the
+front-panel knob and buttons), output routing including the loopback pair,
+and the optical port formats. Presets live in the main menu.
+
+On first start lD Mixer reads the current mix from the device instead of
+overwriting it. Afterwards it restores its saved state on every connect.
+Settings live in `~/.config/ld-mixer/`.
+
+Device commands for inspection and experiments (`dump`, `snapshot`,
+`restore`, `meters`, `watch`, ...) are listed by `ld-mixer help`; the ones
+that write require `--write`.
+
 ## Uninstall
 
 One command removes lD Mixer and everything it created, through whichever
@@ -62,7 +85,7 @@ package manager installed it (pacman, dnf/rpm, Nix, or the manual-install
 manifest), plus your lD Mixer settings and presets:
 
 ```sh
-ld-mixer-uninstall           # add -y to skip the prompt, --keep-user-data to keep settings
+ld-mixer uninstall           # add -y to skip the prompt, --keep-user-data to keep settings
 ```
 
 Equivalent per-distro commands: `sudo pacman -Rns ld-mixer`,
@@ -77,7 +100,7 @@ access to Audient devices (`TAG+="uaccess"`), and it is removed again on
 uninstall. For a quick test without installing:
 
 ```sh
-sudo setfacl -m u:$USER:rw /dev/bus/usb/BBB/DDD   # from `ld-mixer-cli scan`; lost on replug
+sudo setfacl -m u:$USER:rw /dev/bus/usb/BBB/DDD   # from `ld-mixer scan`; lost on replug
 ```
 
 ## Credits

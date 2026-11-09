@@ -3,7 +3,7 @@
   #
   #   nix run github:lovebycoma/ld-mixer            # try it
   #   nix profile install github:lovebycoma/ld-mixer
-  #   ld-mixer-uninstall                            # remove it again
+  #   ld-mixer uninstall                            # remove it again
   #
   # On NixOS, USB access needs the udev rule from the package; add the module:
   #   imports = [ ld-mixer.nixosModules.default ];
