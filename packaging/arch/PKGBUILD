@@ -8,7 +8,7 @@
 # e.g. LDMIXER_SOURCE=https://github.com/lovebycoma/ldmixer.git makepkg -si
 
 pkgname=ld-mixer
-pkgver=0.1.0.r12.gc484718
+pkgver=0.5.0.r13.g9890cf0
 pkgrel=1
 pkgdesc="Unofficial mixer and monitor control for Audient iD interfaces (lD = Linux iD)"
 arch=('x86_64' 'aarch64')

@@ -67,7 +67,7 @@ const CSS: &str = r#"
 .kind-mic .chip { background-color: #f87171; }
 .kind-digital .chip { background-color: #60a5fa; }
 .kind-daw .chip { background-color: #34d399; }
-button.tiny { min-height: 22px; min-width: 26px; padding: 0; font-size: 0.75em; font-weight: 700; }
+button.tiny { min-height: 0; min-width: 0; padding: 0; font-size: 0.75em; font-weight: 700; }
 .mix-dot { min-width: 10px; min-height: 10px; border-radius: 5px; }
 .mix-dot.main { background-color: #2dd4bf; }
 .mix-dot.cuea { background-color: #f59e0b; }
@@ -92,11 +92,6 @@ button.monitor-toggle.talk:checked { background-color: #22c55e; color: #111; }
 window.bus-main .bus-accent { color: #2dd4bf; }
 window.bus-cuea .bus-accent { color: #f59e0b; }
 window.bus-cueb .bus-accent { color: #a78bfa; }
-window.bus-main toggle-group > toggle:checked { background-color: #2dd4bf; color: #0b0d12; }
-window.bus-cuea toggle-group > toggle:checked { background-color: #f59e0b; color: #0b0d12; }
-window.bus-cueb toggle-group > toggle:checked { background-color: #a78bfa; color: #0b0d12; }
-toggle-group > toggle:checked label { color: #0b0d12; }
-toggle-group > toggle { font-weight: 800; padding-left: 14px; padding-right: 14px; }
 "#;
 
 /// Start the GUI. Blocks until the window closes.
@@ -151,6 +146,11 @@ struct MixRow {
     heard: gtk::Label,
 }
 
+/// Size of every strip button (Ø, link, device, mute, solo), fixed so they
+/// line up whatever the theme does to icon or label buttons.
+const TINY_W: i32 = 28;
+const TINY_H: i32 = 24;
+
 /// Width of a mono strip; a linked strip is exactly two of them.
 const STRIP_W: i32 = 92;
 
@@ -160,8 +160,6 @@ struct Ui {
     title: adw::WindowTitle,
     banner: adw::Banner,
     toasts: adw::ToastOverlay,
-    mixes: adw::ToggleGroup,
-    mix_toggles: Vec<adw::Toggle>,
     menu_button: gtk::MenuButton,
     strips_box: gtk::Box,
     mix_rows: Vec<MixRow>,
@@ -200,6 +198,10 @@ struct App {
     mock: bool,
     settings: RefCell<Settings>,
     vdevs: RefCell<Vec<vdev::Status>>,
+    /// Weak self-reference, for scheduling work from `&self` methods.
+    me: OnceCell<std::rc::Weak<App>>,
+    /// A state update is queued (sends are coalesced to ~60 per second).
+    commit_pending: Cell<bool>,
 }
 
 impl App {
@@ -220,7 +222,10 @@ impl App {
             mock,
             settings: RefCell::new(Settings::default()),
             vdevs: RefCell::new(Vec::new()),
+            me: OnceCell::new(),
+            commit_pending: Cell::new(false),
         });
+        let _ = app.me.set(Rc::downgrade(&app));
         app.build_ui();
         app.install_actions();
         app.rebuild_menu();
@@ -231,10 +236,14 @@ impl App {
 
         if let Some(path) = std::env::var_os("LDMIXER_SCREENSHOT") {
             if let Some(bus) = std::env::var("LDMIXER_SCREENSHOT_BUS").ok().as_deref().and_then(bus_from_name) {
-                app.ui().mixes.set_active_name(Some(bus_name(bus)));
+                app.select_bus(bus);
             }
             let a = app.clone();
-            glib::timeout_add_local_once(Duration::from_millis(1800), move || {
+            let delay = std::env::var("LDMIXER_SCREENSHOT_DELAY_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1800);
+            glib::timeout_add_local_once(Duration::from_millis(delay), move || {
                 a.screenshot(std::path::Path::new(&path));
                 a.gapp.quit();
             });
@@ -326,25 +335,6 @@ impl App {
         let title = adw::WindowTitle::new("lD Mixer", "Connecting…");
         header.set_title_widget(Some(&title));
 
-        let mixes = adw::ToggleGroup::new();
-        let mut mix_toggles = Vec::new();
-        for bus in Bus::ALL {
-            let t = adw::Toggle::builder()
-                .label(bus.label().to_uppercase())
-                .name(bus_name(bus))
-                .tooltip(format!("Show the {} mix", bus.label()))
-                .build();
-            mixes.add(t.clone());
-            mix_toggles.push(t);
-        }
-        mixes.set_active_name(Some("main"));
-        let a = self.clone();
-        mixes.connect_active_name_notify(move |g| {
-            if let Some(bus) = g.active_name().as_deref().and_then(bus_from_name) {
-                a.select_bus(bus);
-            }
-        });
-        header.pack_start(&mixes);
 
         let menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
@@ -421,7 +411,7 @@ impl App {
             let a = self.clone();
             row.connect_expanded_notify(move |r| {
                 if r.is_expanded() && !a.syncing.get() {
-                    a.ui().mixes.set_active_name(Some(bus_name(bus)));
+                    a.select_bus(bus);
                 }
             });
             let a = self.clone();
@@ -700,6 +690,7 @@ impl App {
         let a = self.clone();
         window.connect_close_request(move |_| {
             // The daemon keeps the mixer running; only the window closes.
+            a.flush_commit();
             a.conn.borrow_mut().take();
             glib::Propagation::Proceed
         });
@@ -709,8 +700,6 @@ impl App {
             title,
             banner,
             toasts,
-            mixes,
-            mix_toggles,
             menu_button,
             strips_box,
             mix_rows,
@@ -806,6 +795,7 @@ impl App {
         if node < phase_inputs {
             let phase = gtk::ToggleButton::with_label("Ø");
             phase.add_css_class("tiny");
+            phase.set_size_request(TINY_W, TINY_H);
             phase.add_css_class("phase");
             phase.set_tooltip_text(Some("Polarity invert"));
             phase.set_active(self.state.borrow().channels[node].phase);
@@ -825,6 +815,7 @@ impl App {
         if node % 2 == 0 && node + 1 < self.profile.nodes.len() {
             let link = gtk::ToggleButton::builder().child(&link_icon()).build();
             link.add_css_class("tiny");
+            link.set_size_request(TINY_W, TINY_H);
             link.add_css_class("link-toggle");
             link.set_tooltip_text(Some("Link with the next channel as a stereo pair"));
             link.set_active(strip.stereo);
@@ -846,6 +837,7 @@ impl App {
             .active(self.state.borrow().channels[node].virtual_device)
             .build();
         vdev_btn.add_css_class("tiny");
+        vdev_btn.set_size_request(TINY_W, TINY_H);
         vdev_btn.add_css_class("vdev");
         vdev_btn.set_tooltip_text(Some(if playback {
             "Show as its own output (speaker) in other apps while lD Mixer runs"
@@ -911,10 +903,12 @@ impl App {
             .build();
         let mute = gtk::ToggleButton::with_label("M");
         mute.add_css_class("tiny");
+        mute.set_size_request(TINY_W, TINY_H);
         mute.add_css_class("mute");
         mute.set_tooltip_text(Some("Mute in this mix"));
         let solo = gtk::ToggleButton::with_label("S");
         solo.add_css_class("tiny");
+        solo.set_size_request(TINY_W, TINY_H);
         solo.add_css_class("solo");
         solo.set_tooltip_text(Some("Solo in this mix"));
         ms.append(&mute);
@@ -925,7 +919,7 @@ impl App {
         db_label.set_width_request(DB_LABEL_W);
         let f = fader.clone();
         let label = db_label.clone();
-        fader.area.connect_resize(move |_, w, _| {
+        fader.area.connect_resize(move |w, _| {
             let margin = (f.slot_center(w as f64) - DB_LABEL_W as f64 / 2.0).max(0.0) as i32;
             if label.margin_start() != margin {
                 // Defer: changing layout from inside an allocation is not allowed.
@@ -945,8 +939,8 @@ impl App {
             .build();
         inner.append(&sub);
         inner.append(&tools);
-        inner.append(&pan_row);
         inner.append(&ms);
+        inner.append(&pan_row);
         inner.append(&db_label);
         inner.append(&fader.area);
 
@@ -1012,8 +1006,8 @@ impl App {
         };
         let a = self.clone();
         add("mix", Some(glib::VariantTy::STRING), Box::new(move |p| {
-            if let Some(name) = p {
-                a.ui().mixes.set_active_name(Some(&name));
+            if let Some(bus) = p.as_deref().and_then(bus_from_name) {
+                a.select_bus(bus);
             }
         }));
         let a = self.clone();
@@ -1163,9 +1157,25 @@ impl App {
     }
 
     /// Send the current state to the daemon, which applies and saves it.
+    /// A fader drag produces an event per pointer motion, so sends are
+    /// coalesced: at most one every 16 ms, always with the latest state.
     fn commit(&self) {
-        let st = self.state.borrow().clone();
-        self.send(Request::SetState(Box::new(st)));
+        if self.commit_pending.replace(true) {
+            return;
+        }
+        match self.me.get().and_then(|w| w.upgrade()) {
+            Some(me) => {
+                glib::timeout_add_local_once(Duration::from_millis(16), move || me.flush_commit());
+            }
+            None => self.flush_commit(),
+        }
+    }
+
+    fn flush_commit(&self) {
+        if self.commit_pending.replace(false) {
+            let st = self.state.borrow().clone();
+            self.send(Request::SetState(Box::new(st)));
+        }
     }
 
     fn select_bus(&self, bus: Bus) {
@@ -1465,11 +1475,6 @@ impl App {
     fn sync_names(&self) {
         let ui = self.ui();
         let st = self.state.borrow();
-        for (t, bus) in ui.mix_toggles.iter().zip(Bus::ALL) {
-            let name = st.mix_name(bus);
-            t.set_label(Some(&name.to_uppercase()));
-            t.set_tooltip(&format!("Show {name}"));
-        }
         for m in &ui.mix_rows {
             m.row.set_title(&st.mix_name(m.bus));
         }

@@ -19,7 +19,9 @@ use crate::device::{self, ControlIo, DeviceInfo};
 use crate::protocol::{self, entity, monitor};
 
 const TICK: Duration = Duration::from_millis(33);
-const MONITOR_EVERY: Duration = Duration::from_millis(120);
+const MONITOR_EVERY: Duration = Duration::from_millis(150);
+/// PipeWire's quantum rarely changes; reading it spawns `pw-metadata`.
+const QUANTUM_EVERY: Duration = Duration::from_secs(5);
 const SYSTEM_EVERY: Duration = Duration::from_millis(1000);
 const RECONNECT_EVERY: Duration = Duration::from_millis(2000);
 const RATE_CHANGE_QUIET: Duration = Duration::from_secs(3);
@@ -135,6 +137,7 @@ struct Engine {
     last_attempt: Option<Instant>,
     proc_rate: Option<String>,
     quiet_until: Option<Instant>,
+    quantum: ((Option<u32>, bool), Option<Instant>),
 }
 
 impl Engine {
@@ -156,6 +159,7 @@ impl Engine {
             last_attempt: None,
             proc_rate: None,
             quiet_until: None,
+            quantum: ((None, false), None),
         }
     }
 
@@ -406,7 +410,10 @@ impl Engine {
             quantum_forced: false,
         };
         let mut state = state;
-        (state.quantum, state.quantum_forced) = pipewire_quantum();
+        if self.quantum.1.is_none_or(|t| t.elapsed() >= QUANTUM_EVERY) {
+            self.quantum = (pipewire_quantum(), Some(Instant::now()));
+        }
+        (state.quantum, state.quantum_forced) = self.quantum.0;
         if self.system.as_ref() != Some(&state) {
             self.system = Some(state.clone());
             self.emit(Event::System(state));

@@ -54,6 +54,7 @@ struct Daemon {
     first_run: bool,
     awaiting_readback: bool,
     dirty: bool,
+    last_change: std::time::Instant,
     device: Option<DeviceSummary>,
     device_error: Option<String>,
     monitor: Option<MonitorState>,
@@ -134,6 +135,7 @@ pub fn run(mock: bool) -> Result<()> {
         settings: config::load_settings(),
         awaiting_readback: false,
         dirty: false,
+        last_change: std::time::Instant::now(),
         device: None,
         device_error: None,
         monitor: None,
@@ -151,7 +153,7 @@ pub fn run(mock: bool) -> Result<()> {
     }
 
     d.broadcast(&Notice::Quitting, false);
-    d.save();
+    d.save(true);
     d.vdevs.clear();
     if let Some(t) = d.tray.take() {
         t.shutdown();
@@ -198,7 +200,7 @@ impl Daemon {
         match msg {
             Msg::Quit => return false,
             Msg::Tick => {
-                self.save();
+                self.save(false);
                 if self.vdevs.maintain() {
                     self.broadcast_vdevs();
                 }
@@ -282,6 +284,7 @@ impl Daemon {
                 self.state = s.sanitize(self.profile);
                 self.first_run = false;
                 self.dirty = true;
+                self.last_change = std::time::Instant::now();
                 self.apply();
                 self.reconcile_vdevs();
                 let n = Notice::State(Box::new(self.state.clone()));
@@ -356,6 +359,7 @@ impl Daemon {
                     "The device did not report its mix"
                 };
                 self.dirty = true;
+                self.last_change = std::time::Instant::now();
                 self.apply();
                 self.broadcast(&Notice::State(Box::new(self.state.clone())), false);
                 self.broadcast(&Notice::Toast(toast.into()), false);
@@ -387,8 +391,11 @@ impl Daemon {
         }));
     }
 
-    fn save(&mut self) {
-        if self.dirty && !self.first_run {
+    /// Write the state file, at most once a second after the last change
+    /// (a fader drag changes it continuously), or right away when `now`.
+    fn save(&mut self, now: bool) {
+        let settled = now || self.last_change.elapsed() >= Duration::from_secs(1);
+        if self.dirty && !self.first_run && settled {
             self.dirty = false;
             if let Err(e) = config::save_state(self.profile, &self.state) {
                 log::warn!("saving state failed: {e}");

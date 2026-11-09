@@ -1,6 +1,9 @@
 //! Custom-drawn console widgets: a fader with built-in meters, and a knob.
 //!
-//! Both are thin wrappers around `gtk::DrawingArea` with gesture
+//! The fader redraws at meter rate, so it renders with GTK's GPU render
+//! nodes ([`SnapArea`]): rectangles, gradients and rounded clips, plus a
+//! texture of the static scale that is rasterized once per size. The knob
+//! changes rarely and stays a Cairo `gtk::DrawingArea`. Both use gesture
 //! controllers. Values are positions in `0.0..=1.0`; the owner maps them to
 //! dB. `set_value` never fires the change callback, so the UI can follow the
 //! device without feedback loops.
@@ -12,7 +15,10 @@ use std::time::{Duration, Instant};
 
 use gtk::cairo;
 use gtk::glib;
+use gtk::graphene::{Point, Rect};
+use gtk::gsk::{ColorStop, RoundedRect};
 use gtk::prelude::*;
+use gtk::gdk;
 
 use ld_mixer::protocol;
 
@@ -52,6 +58,99 @@ fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
 
 type Callback = RefCell<Option<Box<dyn Fn(f64)>>>;
 
+fn rgba(c: Rgb, a: f32) -> gdk::RGBA {
+    gdk::RGBA::new(c.0 as f32, c.1 as f32, c.2 as f32, a)
+}
+
+fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
+    Rect::new(x as f32, y as f32, w.max(0.0) as f32, h.max(0.0) as f32)
+}
+
+fn rounded(x: f64, y: f64, w: f64, h: f64, r: f64) -> RoundedRect {
+    RoundedRect::from_rect(rect(x, y, w, h), r as f32)
+}
+
+// ---------------------------------------------------------------------------
+// SnapArea: a DrawingArea-like widget that draws with render nodes
+// ---------------------------------------------------------------------------
+
+mod imp {
+    use std::cell::{Cell, RefCell};
+
+    use gtk::glib;
+    use gtk::prelude::*;
+    use gtk::subclass::prelude::*;
+
+    type DrawFn = Box<dyn Fn(&gtk::Snapshot, f64, f64)>;
+    type ResizeFn = Box<dyn Fn(i32, i32)>;
+
+    #[derive(Default)]
+    pub struct SnapArea {
+        pub draw: RefCell<Option<DrawFn>>,
+        pub resized: RefCell<Vec<ResizeFn>>,
+        pub content: Cell<(i32, i32)>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for SnapArea {
+        const NAME: &'static str = "LdSnapArea";
+        type Type = super::SnapArea;
+        type ParentType = gtk::Widget;
+    }
+
+    impl ObjectImpl for SnapArea {}
+
+    impl WidgetImpl for SnapArea {
+        fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+            let (w, h) = self.content.get();
+            let v = if orientation == gtk::Orientation::Horizontal { w } else { h };
+            (v, v, -1, -1)
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+            self.parent_size_allocate(width, height, baseline);
+            for cb in self.resized.borrow().iter() {
+                cb(width, height);
+            }
+        }
+
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let obj = self.obj();
+            if let Some(draw) = self.draw.borrow().as_ref() {
+                draw(snapshot, obj.width() as f64, obj.height() as f64);
+            }
+        }
+    }
+}
+
+glib::wrapper! {
+    /// A widget that renders through a snapshot callback (GPU render nodes)
+    /// instead of Cairo, for content that redraws often.
+    pub struct SnapArea(ObjectSubclass<imp::SnapArea>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl SnapArea {
+    pub fn new(content_width: i32, content_height: i32) -> SnapArea {
+        let a: SnapArea = glib::Object::new();
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+        a.imp().content.set((content_width, content_height));
+        a
+    }
+
+    pub fn set_draw_func(&self, f: impl Fn(&gtk::Snapshot, f64, f64) + 'static) {
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+        *self.imp().draw.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Called with the new width and height after every allocation.
+    pub fn connect_resize(&self, f: impl Fn(i32, i32) + 'static) {
+        use gtk::subclass::prelude::ObjectSubclassIsExt;
+        self.imp().resized.borrow_mut().push(Box::new(f));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Fader
 // ---------------------------------------------------------------------------
@@ -64,12 +163,15 @@ struct FaderInner {
     peaks: RefCell<Vec<(f32, Instant)>>,
     drag_origin: Cell<f64>,
     on_change: Callback,
+    /// The parts that only change with the widget's size (meter wells,
+    /// scale, slot), rasterized once per size into a GPU texture.
+    static_layer: RefCell<Option<(i32, i32, i32, gdk::Texture)>>,
 }
 
 /// A vertical fader with a dB scale and one meter per channel.
 #[derive(Clone)]
 pub struct Fader {
-    pub area: gtk::DrawingArea,
+    pub area: SnapArea,
     inner: Rc<FaderInner>,
 }
 
@@ -86,12 +188,9 @@ const SCALE_DB: [f32; 8] = [0.0, -6.0, -12.0, -18.0, -24.0, -36.0, -48.0, -60.0]
 impl Fader {
     /// `channels` meters are drawn left of the slot (0 for none).
     pub fn new(channels: usize, accent: Rgb) -> Fader {
-        let area = gtk::DrawingArea::builder()
-            .content_width(group_width(channels).ceil() as i32 + 4)
-            .content_height(240)
-            .vexpand(true)
-            .focusable(true)
-            .build();
+        let area = SnapArea::new(group_width(channels).ceil() as i32 + 4, 240);
+        area.set_vexpand(true);
+        area.set_focusable(true);
         area.add_css_class("fader");
         let inner = Rc::new(FaderInner {
             value: Cell::new(0.0),
@@ -101,6 +200,7 @@ impl Fader {
             peaks: RefCell::new(vec![(0.0, Instant::now()); channels]),
             drag_origin: Cell::new(0.0),
             on_change: RefCell::new(None),
+            static_layer: RefCell::new(None),
         });
         let f = Fader { area, inner };
         f.install();
@@ -134,17 +234,27 @@ impl Fader {
         let mut m = self.inner.meters.borrow_mut();
         let mut peaks = self.inner.peaks.borrow_mut();
         let now = Instant::now();
+        let mut changed = false;
         for (i, slot) in m.iter_mut().enumerate() {
             let v = levels.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
             // Fast attack, gentle release, so the bar does not flicker.
-            *slot = if v > *slot { v } else { (*slot * 0.82).max(v) };
+            let mut next = if v > *slot { v } else { (*slot * 0.82).max(v) };
+            if next < 0.002 {
+                next = 0.0;
+            }
+            changed |= (next - *slot).abs() > 0.001;
+            *slot = next;
             let p = &mut peaks[i];
             if v >= p.0 || now.duration_since(p.1) > Duration::from_millis(1500) {
+                changed |= (p.0 - v).abs() > 0.001;
                 *p = (v, now);
             }
         }
         drop((m, peaks));
-        self.area.queue_draw();
+        // Silent or steady meters cost nothing.
+        if changed {
+            self.area.queue_draw();
+        }
     }
 
     fn change(&self, v: f64) {
@@ -171,7 +281,7 @@ impl Fader {
 
     fn install(&self) {
         let me = self.clone();
-        self.area.set_draw_func(move |_, cr, w, h| me.draw(cr, w as f64, h as f64));
+        self.area.set_draw_func(move |snap, w, h| me.draw(snap, w, h));
 
         let drag = gtk::GestureDrag::new();
         let me = self.clone();
@@ -231,46 +341,18 @@ impl Fader {
         self.area.add_controller(keys);
     }
 
-    fn draw(&self, cr: &cairo::Context, w: f64, h: f64) {
+    /// Draw the size-dependent background (meter wells, scale, slot).
+    fn draw_static(&self, cr: &cairo::Context, w: f64, h: f64) {
         let len = (h - FADER_TOP - FADER_BOTTOM).max(1.0);
         let ypos = |p: f64| FADER_TOP + (1.0 - p) * len;
         let channels = self.inner.meters.borrow().len();
         let (meter_x0, labels_right, slot_x) = layout(w, channels);
-        let acc = self.inner.accent.get();
-        let v = self.value();
-
-        // Meters on the left, sharing the slot's dB scale.
-        let meters = self.inner.meters.borrow();
-        let peaks = self.inner.peaks.borrow();
-        for (i, &m) in meters.iter().enumerate() {
+        for i in 0..channels {
             let x = meter_x0 + i as f64 * (METER_W + METER_GAP);
             set(cr, METER_BG);
             rounded_rect(cr, x, FADER_TOP, METER_W, len, 1.5);
             let _ = cr.fill();
-            if m > 0.002 {
-                let top = FADER_TOP + (1.0 - m as f64) * len;
-                let grad = cairo::LinearGradient::new(0.0, FADER_TOP + len, 0.0, FADER_TOP);
-                grad.add_color_stop_rgb(0.0, METER_LOW.0, METER_LOW.1, METER_LOW.2);
-                grad.add_color_stop_rgb(0.7, METER_LOW.0, METER_LOW.1, METER_LOW.2);
-                grad.add_color_stop_rgb(0.86, METER_MID.0, METER_MID.1, METER_MID.2);
-                grad.add_color_stop_rgb(1.0, METER_HIGH.0, METER_HIGH.1, METER_HIGH.2);
-                let _ = cr.set_source(&grad);
-                rounded_rect(cr, x, top, METER_W, FADER_TOP + len - top, 1.5);
-                let _ = cr.fill();
-            }
-            let p = peaks[i].0;
-            if p > 0.01 {
-                let y = (FADER_TOP + (1.0 - p as f64) * len).round() + 0.5;
-                set(cr, if p > 0.95 { METER_HIGH } else { CAP });
-                cr.set_line_width(1.0);
-                cr.move_to(x, y);
-                cr.line_to(x + METER_W, y);
-                let _ = cr.stroke();
-            }
         }
-        drop((meters, peaks));
-
-        // Scale between the meters and the slot.
         cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
         cr.set_font_size(8.5);
         for db in SCALE_DB {
@@ -287,35 +369,114 @@ impl Fader {
                 let _ = cr.show_text(&text);
             }
         }
-
-        // Slot, filled below the cap in the mix's accent color.
         set(cr, TRACK);
         rounded_rect(cr, slot_x - 2.0, FADER_TOP - 4.0, 4.0, len + 8.0, 2.0);
         let _ = cr.fill();
-        cr.set_source_rgba(acc.0, acc.1, acc.2, 0.85);
-        rounded_rect(cr, slot_x - 2.0, ypos(v), 4.0, FADER_TOP + len - ypos(v) + 4.0, 2.0);
-        let _ = cr.fill();
+    }
 
-        // Cap.
+    /// The static layer as a texture, re-rasterized only when the size or
+    /// scale changes; the renderer keeps it on the GPU between frames.
+    fn static_texture(&self, w: f64, h: f64) -> Option<gdk::Texture> {
+        let scale = self.area.scale_factor().max(1);
+        let (wi, hi) = (w.ceil() as i32, h.ceil() as i32);
+        let mut cache = self.inner.static_layer.borrow_mut();
+        let fresh = !matches!(&*cache, Some((cw, ch, cs, _)) if *cw == wi && *ch == hi && *cs == scale);
+        if fresh {
+            *cache = (|| {
+                let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, wi * scale, hi * scale).ok()?;
+                surf.set_device_scale(scale as f64, scale as f64);
+                {
+                    let c = cairo::Context::new(&surf).ok()?;
+                    self.draw_static(&c, w, h);
+                }
+                surf.flush();
+                let stride = surf.stride() as usize;
+                let data = surf.data().ok()?.to_vec();
+                // Cairo ARGB32 is premultiplied BGRA in memory on little endian.
+                let tex = gdk::MemoryTexture::new(
+                    wi * scale,
+                    hi * scale,
+                    gdk::MemoryFormat::B8g8r8a8Premultiplied,
+                    &glib::Bytes::from_owned(data),
+                    stride,
+                );
+                Some((wi, hi, scale, tex.upcast::<gdk::Texture>()))
+            })();
+        }
+        cache.as_ref().map(|(_, _, _, t)| t.clone())
+    }
+
+    fn draw(&self, snap: &gtk::Snapshot, w: f64, h: f64) {
+        let len = (h - FADER_TOP - FADER_BOTTOM).max(1.0);
+        let ypos = |p: f64| FADER_TOP + (1.0 - p) * len;
+        let channels = self.inner.meters.borrow().len();
+        let (meter_x0, _, slot_x) = layout(w, channels);
+        let acc = self.inner.accent.get();
+        let v = self.value();
+
+        if let Some(tex) = self.static_texture(w, h) {
+            snap.append_texture(&tex, &rect(0.0, 0.0, w.ceil(), h.ceil()));
+        }
+
+        // Meter levels: one gradient spanning the full height, clipped to
+        // the lit part so the colors stay tied to the dB scale.
+        let stops = [
+            ColorStop::new(0.0, rgba(METER_LOW, 1.0)),
+            ColorStop::new(0.7, rgba(METER_LOW, 1.0)),
+            ColorStop::new(0.86, rgba(METER_MID, 1.0)),
+            ColorStop::new(1.0, rgba(METER_HIGH, 1.0)),
+        ];
+        let meters = self.inner.meters.borrow();
+        let peaks = self.inner.peaks.borrow();
+        for (i, &m) in meters.iter().enumerate() {
+            let x = meter_x0 + i as f64 * (METER_W + METER_GAP);
+            if m > 0.002 {
+                let top = FADER_TOP + (1.0 - m as f64) * len;
+                snap.push_rounded_clip(&rounded(x, top, METER_W, FADER_TOP + len - top, 1.5));
+                snap.append_linear_gradient(
+                    &rect(x, top, METER_W, FADER_TOP + len - top),
+                    &Point::new(x as f32, (FADER_TOP + len) as f32),
+                    &Point::new(x as f32, FADER_TOP as f32),
+                    &stops,
+                );
+                snap.pop();
+            }
+            let p = peaks[i].0;
+            if p > 0.01 {
+                let y = (FADER_TOP + (1.0 - p as f64) * len).round();
+                snap.append_color(&rgba(if p > 0.95 { METER_HIGH } else { CAP }, 1.0), &rect(x, y, METER_W, 1.0));
+            }
+        }
+        drop((meters, peaks));
+
+        // Slot fill below the cap, in the mix's accent color.
+        snap.push_rounded_clip(&rounded(slot_x - 2.0, ypos(v), 4.0, FADER_TOP + len - ypos(v) + 4.0, 2.0));
+        snap.append_color(&rgba(acc, 0.85), &rect(slot_x - 2.0, ypos(v), 4.0, FADER_TOP + len - ypos(v) + 4.0));
+        snap.pop();
+
+        // Cap: shadow, body, accent line.
         let cy = ypos(v);
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.45);
-        rounded_rect(cr, slot_x - CAP_W / 2.0, cy - CAP_H / 2.0 + 2.0, CAP_W, CAP_H, 4.0);
-        let _ = cr.fill();
-        let grad = cairo::LinearGradient::new(0.0, cy - CAP_H / 2.0, 0.0, cy + CAP_H / 2.0);
-        grad.add_color_stop_rgb(0.0, CAP.0, CAP.1, CAP.2);
-        grad.add_color_stop_rgb(1.0, CAP.0 * 0.72, CAP.1 * 0.72, CAP.2 * 0.75);
-        let _ = cr.set_source(&grad);
-        rounded_rect(cr, slot_x - CAP_W / 2.0, cy - CAP_H / 2.0, CAP_W, CAP_H, 4.0);
-        let _ = cr.fill();
-        set(cr, acc);
-        cr.rectangle(slot_x - CAP_W / 2.0 + 4.0, cy - 1.0, CAP_W - 8.0, 2.0);
-        let _ = cr.fill();
+        let (cx, top) = (slot_x - CAP_W / 2.0, cy - CAP_H / 2.0);
+        snap.push_rounded_clip(&rounded(cx, top + 2.0, CAP_W, CAP_H, 4.0));
+        snap.append_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.45), &rect(cx, top + 2.0, CAP_W, CAP_H));
+        snap.pop();
+        snap.push_rounded_clip(&rounded(cx, top, CAP_W, CAP_H, 4.0));
+        snap.append_linear_gradient(
+            &rect(cx, top, CAP_W, CAP_H),
+            &Point::new(cx as f32, top as f32),
+            &Point::new(cx as f32, (top + CAP_H) as f32),
+            &[
+                ColorStop::new(0.0, rgba(CAP, 1.0)),
+                ColorStop::new(1.0, rgba((CAP.0 * 0.72, CAP.1 * 0.72, CAP.2 * 0.75), 1.0)),
+            ],
+        );
+        snap.pop();
+        snap.append_color(&rgba(acc, 1.0), &rect(cx + 4.0, cy - 1.0, CAP_W - 8.0, 2.0));
 
         if self.area.has_focus() {
-            cr.set_source_rgba(acc.0, acc.1, acc.2, 0.6);
-            cr.set_line_width(1.0);
-            rounded_rect(cr, slot_x - CAP_W / 2.0 - 1.5, cy - CAP_H / 2.0 - 1.5, CAP_W + 3.0, CAP_H + 3.0, 5.0);
-            let _ = cr.stroke();
+            let ring = rounded(cx - 1.5, top - 1.5, CAP_W + 3.0, CAP_H + 3.0, 5.0);
+            let c = rgba(acc, 0.6);
+            snap.append_border(&ring, &[1.0; 4], &[c, c, c, c]);
         }
     }
 }

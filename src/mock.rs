@@ -78,7 +78,7 @@ impl ControlIo for MockDevice {
 
     fn get_mem(&self, ent: u8, offset: u16, len: usize) -> Result<Vec<u8>> {
         let mut out = vec![0u8; len];
-        if ent != entity::MIXER || offset != 0 {
+        if ent != entity::MIXER || offset != 0 || std::env::var_os("LDMIXER_MOCK_SILENT").is_some() {
             return Ok(out);
         }
         // Fake program material: mics breathe slowly, DAW returns play a

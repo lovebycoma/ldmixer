@@ -1,6 +1,6 @@
 [package]
 name = "ld-mixer"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2024"
 description = "Unofficial mixer and monitor control for Audient iD interfaces (lD = Linux iD)"
 license = "MIT"
@@ -21,4 +21,5 @@ serde_json = "1.0.154"
 
 [profile.release]
 lto = "thin"
+codegen-units = 1
 strip = true
