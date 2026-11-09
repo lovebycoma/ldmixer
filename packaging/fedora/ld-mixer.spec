@@ -2,6 +2,8 @@
 # which creates the source tarball (with vendored crates, so the build runs
 # offline) and calls rpmbuild. Remove with: ld-mixer-uninstall (or dnf remove ld-mixer)
 
+# Rust release builds carry no debug info, so there is nothing to split out.
+%global debug_package %{nil}
 %{!?_udevrulesdir:%global _udevrulesdir /usr/lib/udev/rules.d}
 
 Name:           ld-mixer
