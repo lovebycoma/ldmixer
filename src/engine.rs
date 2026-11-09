@@ -33,7 +33,7 @@ pub struct Desired {
 }
 
 /// The monitor section, as read from the device.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MonitorState {
     pub volume: Option<f32>,
     pub dim: bool,
@@ -47,7 +47,7 @@ pub struct MonitorState {
     pub polarity: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SystemState {
     pub sample_rate: Option<u32>,
     /// True when an audio stream is running (rate read from /proc).
@@ -65,6 +65,8 @@ pub enum Command {
     Optical { output: bool, mode: i32 },
     /// Read matrix and routing back from the device.
     ReadBack,
+    /// A raw request on behalf of a client; answered with `Event::RawReply`.
+    Raw { client: u64, op: crate::ipc::RawOp },
     Quit,
 }
 
@@ -76,6 +78,7 @@ pub enum Event {
     Monitor(MonitorState),
     System(SystemState),
     ReadBack { matrix: Option<Vec<i16>>, routing: Vec<Option<u8>> },
+    RawReply { client: u64, result: Result<Vec<u8>, String> },
     Error(String),
 }
 
@@ -180,6 +183,9 @@ impl Engine {
         match cmd {
             Command::Quit => return false,
             Command::Apply(d) => self.pending = Some(d),
+            Command::Raw { client, op: _ } if self.dev.is_none() => {
+                self.emit(Event::RawReply { client, result: Err("no device connected".into()) });
+            }
             other => {
                 if self.dev.is_none() || self.is_quiet() {
                     return true;
@@ -218,6 +224,24 @@ impl Engine {
                     .collect();
                 let routing = (0..p.routing_outputs).map(|o| dev.get_route(o).ok()).collect();
                 self.emit(Event::ReadBack { matrix, routing });
+            }
+            Command::Raw { client, op } => {
+                use crate::ipc::RawOp;
+                let r = match op {
+                    RawOp::Get { ent, sel, ch, len } => dev.get(ent, sel, ch, len),
+                    RawOp::Set { ent, sel, ch, data } => dev.set(ent, sel, ch, &data).map(|_| Vec::new()),
+                    RawOp::GetMem { ent, offset, len } => dev.get_mem(ent, offset, len),
+                };
+                let gone = r.as_ref().err().is_some_and(device::is_gone);
+                self.emit(Event::RawReply { client, result: r.map_err(|e| e.to_string()) });
+                if gone {
+                    self.disconnect("device lost".into());
+                }
+                // Writes may have changed what we think the device holds.
+                self.cells.clear();
+                self.routes.clear();
+                self.phases.clear();
+                self.monitor = None;
             }
             Command::Apply(_) | Command::Quit => unreachable!(),
         }

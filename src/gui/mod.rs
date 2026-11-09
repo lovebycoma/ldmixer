@@ -5,9 +5,10 @@
 //! master fader, and a side panel with the monitor section, output routing
 //! (including loopback) and system settings.
 //!
-//! All device I/O happens on the engine thread; this module only edits the
-//! [`MixerState`], sends the resulting [`Desired`] state, and reflects the
-//! engine's events.
+//! The window is a client of the lD Mixer daemon (started on demand): it
+//! edits a copy of the [`MixerState`], sends it to the daemon, and reflects
+//! the daemon's notices. Closing the window leaves the daemon, and with it
+//! the mix and the virtual devices, running.
 
 mod widgets;
 
@@ -19,8 +20,9 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use ld_mixer::config::{self, Settings};
-use ld_mixer::vsource::LoopbackSource;
-use ld_mixer::engine::{self, Command, Desired, EngineHandle, Event, MonitorState, SystemState};
+use ld_mixer::engine::{MonitorState, SystemState};
+use ld_mixer::ipc::{self, MonitorCmd, Notice, Request};
+use ld_mixer::vdev;
 use ld_mixer::mixer::{MixerState, Send, Strip};
 use ld_mixer::protocol::{self, monitor, Bus, NodeKind, Profile};
 
@@ -71,6 +73,10 @@ button.mute:checked { background-color: #dc2626; color: white; }
 button.solo:checked { background-color: #eab308; color: #111; }
 button.phase:checked { background-color: #3b82f6; color: white; }
 button.link-toggle:checked { background-color: #64748b; color: white; }
+button.vdev:checked { background-color: #0ea5e9; color: white; }
+editablelabel.value { min-width: 0; }
+editablelabel.value text { font-size: 0.75em; }
+editablelabel.monitor-volume text { font-size: 1.2em; }
 button.monitor-toggle { min-height: 34px; font-weight: 800; font-size: 0.85em; }
 button.monitor-toggle:checked { background-color: #e5e7eb; color: #111; }
 button.monitor-toggle.cut:checked { background-color: #dc2626; color: white; }
@@ -90,7 +96,12 @@ toggle-group > toggle { font-weight: 800; padding-left: 14px; padding-right: 14p
 
 /// Start the GUI. Blocks until the window closes.
 pub fn run(mock: bool) -> glib::ExitCode {
-    let gapp = adw::Application::builder().application_id(APP_ID).build();
+    let mut flags = gio::ApplicationFlags::empty();
+    if std::env::var_os("LDMIXER_SCREENSHOT").is_some() {
+        // Development screenshots must not hand off to a running window.
+        flags |= gio::ApplicationFlags::NON_UNIQUE;
+    }
+    let gapp = adw::Application::builder().application_id(APP_ID).flags(flags).build();
     gapp.connect_startup(|_| {
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
         let provider = gtk::CssProvider::new();
@@ -120,8 +131,8 @@ struct StripUi {
     strip: Strip,
     fader: Fader,
     pan: Knob,
-    pan_label: gtk::Label,
-    db_label: gtk::Label,
+    pan_label: gtk::EditableLabel,
+    db_label: gtk::EditableLabel,
     mute: gtk::ToggleButton,
     solo: gtk::ToggleButton,
 }
@@ -137,9 +148,9 @@ struct Ui {
     strips_box: gtk::Box,
     master_name: gtk::Label,
     master: Fader,
-    master_db: gtk::Label,
+    master_db: gtk::EditableLabel,
     mon_knob: Knob,
-    mon_label: gtk::Label,
+    mon_label: gtk::EditableLabel,
     mon_buttons: Vec<(u8, gtk::ToggleButton)>,
     mono_mode: adw::ComboRow,
     talk_source: adw::ComboRow,
@@ -157,81 +168,56 @@ struct App {
     profile: &'static Profile,
     state: RefCell<MixerState>,
     bus: Cell<Bus>,
-    engine: RefCell<Option<EngineHandle>>,
+    /// Writer half of the daemon connection.
+    conn: RefCell<Option<std::os::unix::net::UnixStream>>,
     ui: OnceCell<Ui>,
     strips: RefCell<Vec<StripUi>>,
     /// Set while code (not the user) updates widgets, to suppress callbacks.
     syncing: Cell<bool>,
     connected: Cell<bool>,
-    /// No saved state yet: read the device before writing anything.
-    first_run: Cell<bool>,
-    awaiting_readback: Cell<bool>,
-    save_pending: Cell<bool>,
+    /// Set when the daemon announced it is quitting on request.
+    quitting: Cell<bool>,
     /// When the user last moved the monitor knob; device echoes are ignored
     /// for a moment so the knob does not jump back while dragging.
     monitor_touched: Cell<Option<Instant>>,
     mock: bool,
     settings: RefCell<Settings>,
-    /// The "iD24 Loopback" source for other apps, while enabled.
-    loopback: RefCell<Option<LoopbackSource>>,
+    vdevs: RefCell<Vec<vdev::Status>>,
 }
 
 impl App {
     fn start(gapp: &adw::Application, mock: bool) {
         let profile = &protocol::PROFILES[0];
-        let saved = config::load_state(profile);
-        let first_run = saved.is_none();
-        let state = saved.unwrap_or_else(|| MixerState::default_for(profile));
-
-        let (tx, rx) = async_channel::unbounded();
-        let engine = engine::spawn(mock, tx);
-
         let app = Rc::new(App {
             gapp: gapp.clone(),
             profile,
-            state: RefCell::new(state),
+            state: RefCell::new(MixerState::default_for(profile)),
             bus: Cell::new(Bus::Main),
-            engine: RefCell::new(Some(engine)),
+            conn: RefCell::new(None),
             ui: OnceCell::new(),
             strips: RefCell::new(Vec::new()),
             syncing: Cell::new(false),
             connected: Cell::new(false),
-            first_run: Cell::new(first_run),
-            awaiting_readback: Cell::new(false),
-            save_pending: Cell::new(false),
+            quitting: Cell::new(false),
             monitor_touched: Cell::new(None),
             mock,
-            settings: RefCell::new(config::load_settings()),
-            loopback: RefCell::new(None),
+            settings: RefCell::new(Settings::default()),
+            vdevs: RefCell::new(Vec::new()),
         });
         app.build_ui();
         app.install_actions();
         app.rebuild_menu();
         app.rebuild_strips();
         app.sync_panel();
-
-        let a = app.clone();
-        glib::spawn_future_local(async move {
-            while let Ok(ev) = rx.recv().await {
-                a.on_event(ev);
-            }
-        });
-
-        // Debounced autosave.
-        let a = app.clone();
-        glib::timeout_add_local(Duration::from_millis(800), move || {
-            a.flush_save();
-            glib::ControlFlow::Continue
-        });
+        app.connect_daemon();
 
         if let Some(path) = std::env::var_os("LDMIXER_SCREENSHOT") {
             if let Some(bus) = std::env::var("LDMIXER_SCREENSHOT_BUS").ok().as_deref().and_then(bus_from_name) {
                 app.ui().mixes.set_active_name(Some(bus_name(bus)));
             }
             let a = app.clone();
-            glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+            glib::timeout_add_local_once(Duration::from_millis(1800), move || {
                 a.screenshot(std::path::Path::new(&path));
-                a.shutdown();
                 a.gapp.quit();
             });
         }
@@ -239,13 +225,67 @@ impl App {
         app.ui().window.present();
     }
 
+    /// Connect to the daemon (starting it if needed) and pump its notices
+    /// into the main loop. Reconnects if the daemon goes away unexpectedly.
+    fn connect_daemon(self: &Rc<Self>) {
+        let conn = match ipc::connect_or_spawn(true, self.mock) {
+            Ok(c) => c,
+            Err(e) => {
+                self.set_offline(&format!("{e:#}"));
+                let a = self.clone();
+                glib::timeout_add_local_once(Duration::from_secs(2), move || a.connect_daemon());
+                return;
+            }
+        };
+        let ipc::Connection { writer, mut reader } = conn;
+        *self.conn.borrow_mut() = Some(writer);
+        let (tx, rx) = async_channel::unbounded();
+        std::thread::spawn(move || {
+            while let Ok(Some(n)) = ipc::read_line::<Notice>(&mut reader) {
+                if tx.send_blocking(n).is_err() {
+                    return;
+                }
+            }
+        });
+        let a = self.clone();
+        glib::spawn_future_local(async move {
+            while let Ok(n) = rx.recv().await {
+                a.on_notice(n);
+            }
+            // The daemon went away.
+            a.conn.borrow_mut().take();
+            a.connected.set(false);
+            if a.quitting.get() {
+                a.gapp.quit();
+            } else {
+                a.set_offline("The lD Mixer background service stopped; restarting it…");
+                let a2 = a.clone();
+                glib::timeout_add_local_once(Duration::from_secs(1), move || a2.connect_daemon());
+            }
+        });
+    }
+
+    fn set_offline(&self, reason: &str) {
+        let ui = self.ui();
+        ui.title.set_subtitle("Not connected");
+        ui.device_row.set_subtitle("Not connected");
+        ui.banner.set_title(reason);
+        ui.banner.set_revealed(true);
+        for s in self.strips.borrow().iter() {
+            s.fader.set_meters(&[0.0, 0.0]);
+        }
+    }
+
     fn ui(&self) -> &Ui {
         self.ui.get().expect("UI built")
     }
 
-    fn send(&self, cmd: Command) {
-        if let Some(e) = self.engine.borrow().as_ref() {
-            e.send(cmd);
+    fn send(&self, req: Request) {
+        let mut conn = self.conn.borrow_mut();
+        if let Some(w) = conn.as_mut() {
+            if ipc::write_line(w, &req).is_err() {
+                *conn = None;
+            }
         }
     }
 
@@ -335,8 +375,17 @@ impl App {
         let master_sub = gtk::Label::new(Some("Master"));
         master_sub.add_css_class("strip-sub");
         let master = Fader::new(0, accent(Bus::Main));
-        let master_db = gtk::Label::new(Some("0.0 dB"));
-        master_db.add_css_class("value");
+        let master_db = value_entry("0.0 dB");
+        let a = self.clone();
+        on_value_edited(&master_db, move |l, text| {
+            let ui = a.ui();
+            if let Some(db) = parse_db(text) {
+                ui.master.set_value(protocol::db_to_fader(db));
+                a.state.borrow_mut().masters[a.bus.get().index()] = ui.master.value();
+                a.commit();
+            }
+            l.set_text(&protocol::format_db(protocol::fader_to_db(ui.master.value())));
+        });
         master_box.append(&master_name);
         master_box.append(&chip);
         master_box.append(&master_sub);
@@ -348,7 +397,7 @@ impl App {
                 return;
             }
             a.state.borrow_mut().masters[a.bus.get().index()] = v;
-            a.ui().master_db.set_label(&protocol::format_db(protocol::fader_to_db(v)));
+            a.ui().master_db.set_text(&protocol::format_db(protocol::fader_to_db(v)));
             a.commit();
         });
 
@@ -377,8 +426,22 @@ impl App {
             .build();
         let mon_knob = Knob::new(128, false, protocol::db_to_fader(Some(-20.0)), hex(0xe5e7eb));
         mon_knob.area.set_tooltip_text(Some("Monitor volume (follows the front-panel knob)"));
-        let mon_label = gtk::Label::new(Some("–"));
+        let mon_label = value_entry("–");
         mon_label.add_css_class("monitor-volume");
+        mon_label.set_tooltip_text(Some("Click to type a level in dB"));
+        let a = self.clone();
+        on_value_edited(&mon_label, move |l, text| {
+            let knob = &a.ui().mon_knob;
+            match parse_db(text) {
+                Some(db) => {
+                    knob.set_value(protocol::db_to_fader(db));
+                    a.monitor_touched.set(Some(Instant::now()));
+                    a.send(Request::Monitor(MonitorCmd::Level(monitor::VOLUME, db)));
+                    l.set_text(&protocol::format_db(db));
+                }
+                None => l.set_text(&protocol::format_db(protocol::fader_to_db(knob.value()))),
+            }
+        });
         mon_box.append(&mon_knob.area);
         mon_box.append(&mon_label);
         let a = self.clone();
@@ -388,8 +451,8 @@ impl App {
             }
             let db = protocol::fader_to_db(v);
             a.monitor_touched.set(Some(Instant::now()));
-            a.ui().mon_label.set_label(&protocol::format_db(db));
-            a.send(Command::MonitorLevel(monitor::VOLUME, db));
+            a.ui().mon_label.set_text(&protocol::format_db(db));
+            a.send(Request::Monitor(MonitorCmd::Level(monitor::VOLUME, db)));
         });
 
         let grid = gtk::Grid::builder()
@@ -415,7 +478,7 @@ impl App {
             let a = self.clone();
             b.connect_toggled(move |b| {
                 if !a.syncing.get() {
-                    a.send(Command::MonitorBool(sel, b.is_active()));
+                    a.send(Request::Monitor(MonitorCmd::Bool(sel, b.is_active())));
                 }
             });
             grid.attach(&b, (i % 3) as i32, (i / 3) as i32, 1, 1);
@@ -432,7 +495,7 @@ impl App {
         let a = self.clone();
         mono_mode.connect_selected_notify(move |r| {
             if !a.syncing.get() {
-                a.send(Command::MonitorByte(monitor::MONO_MODE, r.selected() as u8));
+                a.send(Request::Monitor(MonitorCmd::Byte(monitor::MONO_MODE, r.selected() as u8)));
             }
         });
         let talk_source = adw::ComboRow::builder()
@@ -443,7 +506,7 @@ impl App {
         let a = self.clone();
         talk_source.connect_selected_notify(move |r| {
             if !a.syncing.get() {
-                a.send(Command::MonitorByte(monitor::TALKBACK_SOURCE, 0x10 + r.selected() as u8));
+                a.send(Request::Monitor(MonitorCmd::Byte(monitor::TALKBACK_SOURCE, 0x10 + r.selected() as u8)));
             }
         });
         let dim_level = adw::SpinRow::with_range(-60.0, 0.0, 1.0);
@@ -452,7 +515,7 @@ impl App {
         let a = self.clone();
         dim_level.connect_value_notify(move |r| {
             if !a.syncing.get() {
-                a.send(Command::MonitorLevel(monitor::DIM_LEVEL, Some(r.value() as f32)));
+                a.send(Request::Monitor(MonitorCmd::Level(monitor::DIM_LEVEL, Some(r.value() as f32))));
             }
         });
         mon_opts.add(&mono_mode);
@@ -502,10 +565,8 @@ impl App {
                 return;
             }
             a.settings.borrow_mut().loopback_source = r.is_active();
-            if let Err(e) = config::save_settings(&a.settings.borrow()) {
-                log::warn!("saving settings failed: {e}");
-            }
-            a.update_loopback_source();
+            let s = a.settings.borrow().clone();
+            a.send(Request::SetSettings(s));
         });
         out_group.add(&loopback_switch);
 
@@ -527,7 +588,7 @@ impl App {
             let a = self.clone();
             row.connect_selected_notify(move |r| {
                 if !a.syncing.get() {
-                    a.send(Command::Optical { output, mode: r.selected() as i32 });
+                    a.send(Request::Optical { output, mode: r.selected() as i32 });
                 }
             });
         }
@@ -566,7 +627,8 @@ impl App {
 
         let a = self.clone();
         window.connect_close_request(move |_| {
-            a.shutdown();
+            // The daemon keeps the mixer running; only the window closes.
+            a.conn.borrow_mut().take();
             glib::Propagation::Proceed
         });
 
@@ -685,7 +747,7 @@ impl App {
             tools.append(&phase);
         }
         if node % 2 == 0 && node + 1 < self.profile.nodes.len() {
-            let link = gtk::ToggleButton::with_label("LINK");
+            let link = gtk::ToggleButton::builder().child(&link_icon()).build();
             link.add_css_class("tiny");
             link.add_css_class("link-toggle");
             link.set_tooltip_text(Some("Link with the next channel as a stereo pair"));
@@ -701,14 +763,36 @@ impl App {
             });
             tools.append(&link);
         }
+        // Expose this strip to other apps as its own PipeWire device.
+        let playback = kind.is_playback();
+        let vdev_btn = gtk::ToggleButton::builder()
+            .icon_name(if playback { "audio-speakers-symbolic" } else { "audio-input-microphone-symbolic" })
+            .active(self.state.borrow().channels[node].virtual_device)
+            .build();
+        vdev_btn.add_css_class("tiny");
+        vdev_btn.add_css_class("vdev");
+        vdev_btn.set_tooltip_text(Some(if playback {
+            "Show as its own output (speaker) in other apps while lD Mixer runs"
+        } else {
+            "Show as its own input (microphone) in other apps while lD Mixer runs"
+        }));
+        let a = self.clone();
+        vdev_btn.connect_toggled(move |b| {
+            if a.syncing.get() {
+                return;
+            }
+            a.state.borrow_mut().channels[node].virtual_device = b.is_active();
+            a.commit();
+        });
+        tools.append(&vdev_btn);
 
         let pan = Knob::new(40, true, 0.5, accent(bus));
         pan.area.set_tooltip_text(Some(if strip.stereo { "Balance" } else { "Pan" }));
-        let pan_label = gtk::Label::new(Some("C"));
-        pan_label.add_css_class("value");
+        let pan_label = value_entry("C");
+        pan_label.set_tooltip_text(Some("Click to type: C, L50, R30 or -100..100"));
         let fader = Fader::new(if strip.stereo { 2 } else { 1 }, accent(bus));
-        let db_label = gtk::Label::new(Some("-inf"));
-        db_label.add_css_class("value");
+        let db_label = value_entry("-inf");
+        db_label.set_tooltip_text(Some("Click to type a level in dB (e.g. -12, -inf)"));
 
         let ms = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -739,15 +823,35 @@ impl App {
         let a = self.clone();
         let label = db_label.clone();
         fader.connect_changed(move |v| {
-            label.set_label(&protocol::format_db(protocol::fader_to_db(v)));
+            label.set_text(&protocol::format_db(protocol::fader_to_db(v)));
             a.update_send(node, |s| s.fader = v);
         });
         let a = self.clone();
         let label = pan_label.clone();
         pan.connect_changed(move |v| {
             let p = v * 2.0 - 1.0;
-            label.set_label(&pan_text(p));
+            label.set_text(&pan_text(p));
             a.update_send(node, |s| s.pan = p);
+        });
+        // Typed values.
+        let a = self.clone();
+        let f = fader.clone();
+        on_value_edited(&db_label, move |l, text| {
+            if let Some(db) = parse_db(text) {
+                f.set_value(protocol::db_to_fader(db));
+                let v = f.value();
+                a.update_send(node, |s| s.fader = v);
+            }
+            l.set_text(&protocol::format_db(protocol::fader_to_db(f.value())));
+        });
+        let a = self.clone();
+        let k = pan.clone();
+        on_value_edited(&pan_label, move |l, text| {
+            if let Some(p) = parse_pan(text) {
+                k.set_value((p + 1.0) / 2.0);
+                a.update_send(node, |s| s.pan = p);
+            }
+            l.set_text(&pan_text(k.value() * 2.0 - 1.0));
         });
         let a = self.clone();
         mute.connect_toggled(move |m| {
@@ -800,8 +904,7 @@ impl App {
         let a = self.clone();
         add("readback", None, Box::new(move |_| {
             if a.connected.get() {
-                a.awaiting_readback.set(true);
-                a.send(Command::ReadBack);
+                a.send(Request::ReadBack);
             } else {
                 a.toast("No device connected");
             }
@@ -810,6 +913,16 @@ impl App {
         add("reset", None, Box::new(move |_| a.reset_dialog()));
         let a = self.clone();
         add("about", None, Box::new(move |_| a.about()));
+        let a = self.clone();
+        add("quit-all", None, Box::new(move |_| {
+            // Stops the background service too; the window closes when the
+            // daemon confirms.
+            a.quitting.set(true);
+            a.send(Request::Shutdown);
+            if a.conn.borrow().is_none() {
+                a.gapp.quit();
+            }
+        }));
 
         self.gapp.set_accels_for_action("app.mix::main", &["<Ctrl>1"]);
         self.gapp.set_accels_for_action("app.mix::cuea", &["<Ctrl>2"]);
@@ -843,6 +956,7 @@ impl App {
         menu.append_section(None, &device);
         let about = gio::Menu::new();
         about.append(Some("About lD Mixer"), Some("app.about"));
+        about.append(Some("Quit lD Mixer Completely"), Some("app.quit-all"));
         menu.append_section(None, &about);
         self.ui().menu_button.set_menu_model(Some(&menu));
     }
@@ -861,62 +975,10 @@ impl App {
         self.commit();
     }
 
-    /// Push the current state to the device and schedule a save.
+    /// Send the current state to the daemon, which applies and saves it.
     fn commit(&self) {
-        self.save_pending.set(true);
-        if !self.connected.get() || self.awaiting_readback.get() {
-            return;
-        }
-        let st = self.state.borrow();
-        self.send(Command::Apply(Desired {
-            matrix: st.matrix(),
-            routing: st.routing(self.profile),
-            phases: st.phases(self.profile),
-        }));
-    }
-
-    fn flush_save(&self) {
-        if self.save_pending.replace(false) && !self.first_run.get() {
-            if let Err(e) = config::save_state(self.profile, &self.state.borrow()) {
-                log::warn!("saving state failed: {e}");
-            }
-        }
-    }
-
-    fn shutdown(&self) {
-        if !self.first_run.get() {
-            self.save_pending.set(true);
-        }
-        self.flush_save();
-        // Dropping the handle stops and joins the engine thread.
-        self.engine.borrow_mut().take();
-        self.loopback.borrow_mut().take();
-    }
-
-    /// Start or stop the "iD24 Loopback" source to match the switch and the
-    /// connection. Never runs for the mock device.
-    fn update_loopback_source(&self) {
-        let want = self.settings.borrow().loopback_source && self.connected.get() && !self.mock;
-        let mut current = self.loopback.borrow_mut();
-        if let Some(src) = current.as_mut() {
-            if !want || !src.is_running() {
-                *current = None;
-            }
-        }
-        if want && current.is_none() {
-            match self.profile.loopback_capture.map(LoopbackSource::start) {
-                Some(Ok(src)) => *current = Some(src),
-                Some(Err(e)) => {
-                    drop(current);
-                    self.toast(&format!("Loopback input unavailable: {e}"));
-                    self.syncing.set(true);
-                    self.ui().loopback_switch.set_active(false);
-                    self.syncing.set(false);
-                    self.settings.borrow_mut().loopback_source = false;
-                }
-                None => {}
-            }
-        }
+        let st = self.state.borrow().clone();
+        self.send(Request::SetState(Box::new(st)));
     }
 
     fn select_bus(&self, bus: Bus) {
@@ -940,8 +1002,12 @@ impl App {
             s.pan.set_accent(accent(bus));
             s.fader.set_value(send.fader);
             s.pan.set_value((send.pan + 1.0) / 2.0);
-            s.pan_label.set_label(&pan_text(send.pan));
-            s.db_label.set_label(&protocol::format_db(protocol::fader_to_db(send.fader)));
+            if !s.pan_label.is_editing() {
+                s.pan_label.set_text(&pan_text(send.pan));
+            }
+            if !s.db_label.is_editing() {
+                s.db_label.set_text(&protocol::format_db(protocol::fader_to_db(send.fader)));
+            }
             s.mute.set_active(send.mute);
             s.solo.set_active(send.solo);
         }
@@ -949,7 +1015,7 @@ impl App {
         let m = st.masters[bus.index()];
         ui.master.set_accent(accent(bus));
         ui.master.set_value(m);
-        ui.master_db.set_label(&protocol::format_db(protocol::fader_to_db(m)));
+        ui.master_db.set_text(&protocol::format_db(protocol::fader_to_db(m)));
         ui.master_name.set_label(&format!("{} MIX", bus.label().to_uppercase()));
         self.syncing.set(false);
     }
@@ -966,54 +1032,50 @@ impl App {
         self.syncing.set(false);
     }
 
-    // -- engine events -----------------------------------------------------------
+    // -- daemon notices -----------------------------------------------------------
 
-    fn on_event(self: &Rc<Self>, ev: Event) {
+    fn on_notice(self: &Rc<Self>, n: Notice) {
         let ui = self.ui();
-        match ev {
-            Event::Connected(info) => {
+        match n {
+            Notice::Welcome { .. } => {}
+            Notice::Device(Some(d), _) => {
                 self.connected.set(true);
-                let who = if info.mock {
+                let who = if d.mock {
                     "mock device".to_string()
                 } else {
-                    info.serial.clone().unwrap_or_else(|| "connected".into())
+                    d.serial.clone().unwrap_or_else(|| "connected".into())
                 };
-                ui.title.set_subtitle(&format!("{} · {}", info.profile.name, who));
+                ui.title.set_subtitle(&format!("{} · {}", d.model, who));
                 ui.device_row.set_subtitle(&format!(
                     "{} · firmware {:x}.{:02x}{}",
-                    info.profile.name,
-                    info.firmware >> 8,
-                    info.firmware & 0xff,
-                    if info.mock { " · mock" } else { "" }
+                    d.model,
+                    d.firmware >> 8,
+                    d.firmware & 0xff,
+                    if d.mock { " · mock" } else { "" }
                 ));
-                if info.mock {
+                if d.mock {
                     ui.banner.set_title("Mock device: no hardware is being controlled");
                     ui.banner.set_revealed(true);
                 } else {
                     ui.banner.set_revealed(false);
                 }
-                self.update_loopback_source();
-                if self.first_run.get() {
-                    // Never overwrite an unknown device state blindly.
-                    self.awaiting_readback.set(true);
-                    self.send(Command::ReadBack);
-                } else {
-                    self.commit();
-                }
             }
-            Event::Disconnected(reason) => {
+            Notice::Device(None, reason) => {
                 self.connected.set(false);
-                ui.title.set_subtitle("Not connected");
-                ui.device_row.set_subtitle("Not connected");
-                ui.banner.set_title(&reason);
-                ui.banner.set_revealed(true);
-                self.update_loopback_source();
-                for s in self.strips.borrow().iter() {
-                    s.fader.set_meters(&[0.0, 0.0]);
-                }
+                self.set_offline(&reason.unwrap_or_else(|| "No interface connected".into()));
             }
-            Event::ReadBack { matrix, routing } => self.on_readback(matrix, routing),
-            Event::Meters(levels) => {
+            Notice::State(st) => {
+                *self.state.borrow_mut() = *st;
+                self.rebuild_strips();
+                self.sync_panel();
+            }
+            Notice::Settings(st) => {
+                self.syncing.set(true);
+                ui.loopback_switch.set_active(st.loopback_source);
+                self.syncing.set(false);
+                *self.settings.borrow_mut() = st;
+            }
+            Notice::Meters(levels) => {
                 // Draw meters on the fader's own dB scale.
                 let levels: Vec<f32> =
                     levels.iter().map(|db| protocol::db_to_fader(*db) as f32).collect();
@@ -1023,47 +1085,26 @@ impl App {
                     s.fader.set_meters(levels.get(s.strip.node..end).unwrap_or(&[]));
                 }
             }
-            Event::Monitor(m) => self.on_monitor(&m),
-            Event::System(s) => self.on_system(&s),
-            Event::Error(e) => self.toast(&format!("Device error: {e}")),
-        }
-    }
-
-    fn on_readback(self: &Rc<Self>, matrix: Option<Vec<i16>>, routing: Vec<Option<u8>>) {
-        self.awaiting_readback.set(false);
-        let was_first = self.first_run.replace(false);
-        // Reads that alias (every row identical) are not trustworthy.
-        let usable = matrix.filter(|m| {
-            let rows: Vec<&[i16]> = m.chunks(protocol::MIXER_STRIDE).collect();
-            let aliased = rows.windows(2).all(|w| w[0] == w[1])
-                && rows[0].iter().any(|&c| c != protocol::RAW_MUTE);
-            !aliased
-        });
-        match usable {
-            Some(m) => {
-                let mut st = self.state.borrow_mut();
-                st.import_matrix(&m);
-                for (i, pair) in self.profile.outputs.iter().enumerate() {
-                    let code = routing.get(pair.first as usize).copied().flatten();
-                    if let Some(src) = code.and_then(|c| protocol::route_source_from_code(self.profile.route_scheme, c)) {
-                        if pair.sources.contains(&src) {
-                            st.routes[i] = src;
+            Notice::Monitor(m) => self.on_monitor(&m),
+            Notice::System(s) => self.on_system(&s),
+            Notice::VirtualDevices(list) => {
+                let old = self.vdevs.replace(list.clone());
+                for st in &list {
+                    let was_error = old
+                        .iter()
+                        .find(|o| o.spec.node_name == st.spec.node_name)
+                        .and_then(|o| o.error.clone());
+                    if let Some(e) = &st.error {
+                        if was_error.as_ref() != Some(e) {
+                            self.toast(&format!("{}: {e}", st.spec.description));
                         }
                     }
                 }
-                drop(st);
-                self.toast("Loaded the current mix from the device");
             }
-            None if was_first => {
-                self.toast("Could not read the device's mix; applied lD Mixer defaults");
-            }
-            None => {
-                self.toast("The device did not report its mix");
-            }
+            Notice::Toast(t) => self.toast(&t),
+            Notice::RawReply(_) => {}
+            Notice::Quitting => self.quitting.set(true),
         }
-        self.rebuild_strips();
-        self.sync_panel();
-        self.commit();
     }
 
     fn on_monitor(&self, m: &MonitorState) {
@@ -1075,7 +1116,9 @@ impl App {
             .is_some_and(|t| t.elapsed() < Duration::from_millis(600));
         if !touched {
             ui.mon_knob.set_value(protocol::db_to_fader(m.volume));
-            ui.mon_label.set_label(&protocol::format_db(m.volume));
+            if !ui.mon_label.is_editing() {
+                ui.mon_label.set_text(&protocol::format_db(m.volume));
+            }
         }
         for (sel, b) in &ui.mon_buttons {
             b.set_active(match *sel {
@@ -1149,7 +1192,7 @@ impl App {
             "Rename",
             move |a, text| {
                 a.state.borrow_mut().channels[node].label = text.trim().to_string();
-                a.save_pending.set(true);
+                a.commit();
                 a.rebuild_strips();
             },
         );
@@ -1203,7 +1246,6 @@ impl App {
         dialog.connect_response(None, move |_, resp| {
             if resp == "reset" {
                 *a.state.borrow_mut() = MixerState::default_for(a.profile);
-                a.first_run.set(false);
                 a.rebuild_strips();
                 a.sync_panel();
                 a.commit();
@@ -1255,4 +1297,104 @@ fn pan_text(p: f64) -> String {
         v if v < 0 => format!("L{}", -v),
         v => format!("R{v}"),
     }
+}
+
+/// A small click-to-edit value readout.
+fn value_entry(text: &str) -> gtk::EditableLabel {
+    let l = gtk::EditableLabel::new(text);
+    l.add_css_class("value");
+    l.set_halign(gtk::Align::Center);
+    l.set_alignment(0.5);
+    l.set_width_chars(6);
+    l.set_max_width_chars(7);
+    l
+}
+
+/// Call `f(label, typed_text)` when the user finishes editing. Escape
+/// restores the old text before this fires, so `f` can always reformat.
+fn on_value_edited(l: &gtk::EditableLabel, f: impl Fn(&gtk::EditableLabel, &str) + 'static) {
+    l.connect_editing_notify(move |l| {
+        if !l.is_editing() {
+            let text = l.text().to_string();
+            f(l, &text);
+        }
+    });
+}
+
+/// Parse a typed level: "-12", "-12 dB", "−6.5", "-inf", "mute", "off".
+/// Values above 0 dB are capped at 0 dB. `None` = not understood;
+/// `Some(None)` = silence.
+fn parse_db(text: &str) -> Option<Option<f32>> {
+    let t = text.trim().to_lowercase().replace('−', "-");
+    let t = t.trim_end_matches("db").trim();
+    if matches!(t, "-inf" | "inf" | "-∞" | "mute" | "off") {
+        return Some(None);
+    }
+    let v: f32 = t.parse().ok()?;
+    if !v.is_finite() {
+        return None;
+    }
+    Some(if v <= protocol::FLOOR_DB { None } else { Some(v.min(0.0)) })
+}
+
+/// Parse a typed pan: "C", "L", "R", "L30", "R 45", "-100".."100".
+fn parse_pan(text: &str) -> Option<f64> {
+    let t = text.trim().to_uppercase().replace('−', "-");
+    let num = |s: &str| -> Option<f64> {
+        let s = s.trim();
+        if s.is_empty() { Some(100.0) } else { s.parse::<f64>().ok() }
+    };
+    let v = if t == "C" || t == "0" {
+        0.0
+    } else if let Some(rest) = t.strip_prefix('L') {
+        -num(rest)?
+    } else if let Some(rest) = t.strip_prefix('R') {
+        num(rest)?
+    } else {
+        t.parse::<f64>().ok()?
+    };
+    Some((v / 100.0).clamp(-1.0, 1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_values() {
+        assert_eq!(parse_db("-12"), Some(Some(-12.0)));
+        assert_eq!(parse_db(" -6.5 dB "), Some(Some(-6.5)));
+        assert_eq!(parse_db("+3"), Some(Some(0.0)));
+        assert_eq!(parse_db("-inf"), Some(None));
+        assert_eq!(parse_db("-200"), Some(None));
+        assert_eq!(parse_db("loud"), None);
+        assert_eq!(parse_pan("C"), Some(0.0));
+        assert_eq!(parse_pan("L30"), Some(-0.3));
+        assert_eq!(parse_pan("r"), Some(1.0));
+        assert_eq!(parse_pan("-50"), Some(-0.5));
+        assert_eq!(parse_pan("x"), None);
+    }
+}
+
+/// A chain-link glyph drawn in the widget's text color (Adwaita's
+/// `insert-link-symbolic` no longer looks like a link).
+fn link_icon() -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::builder().content_width(14).content_height(14).build();
+    area.set_draw_func(|area, cr, w, h| {
+        let c = area.color();
+        cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, c.alpha() as f64);
+        cr.set_line_width(1.6);
+        cr.translate(w as f64 / 2.0, h as f64 / 2.0);
+        cr.rotate(-std::f64::consts::FRAC_PI_4);
+        // Two interlocking rounded links.
+        for dx in [-2.6, 2.6] {
+            let (x, y, lw, r) = (dx - 3.6, -2.2, 7.2, 2.2);
+            cr.new_sub_path();
+            cr.arc(x + lw - r, y + r, r, -std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
+            cr.arc(x + r, y + r, r, std::f64::consts::FRAC_PI_2, 3.0 * std::f64::consts::FRAC_PI_2);
+            cr.close_path();
+            let _ = cr.stroke();
+        }
+    });
+    area
 }

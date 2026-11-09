@@ -22,6 +22,8 @@ BuildRequires:  pkgconfig(libadwaita-1)
 BuildRequires:  pkgconfig(libusb-1.0)
 BuildRequires:  systemd-rpm-macros
 Requires:       hicolor-icon-theme
+# pw-loopback and pw-dump, for the virtual inputs/outputs
+Recommends:     pipewire-utils
 
 %description
 lD Mixer (Linux iD Mixer) is an unofficial counterpart of the Audient iD

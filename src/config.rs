@@ -25,7 +25,7 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// App preferences that are not part of a mix (not stored in presets).
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     /// Offer the hardware loopback to other apps as "iD24 Loopback".
     #[serde(default)]

@@ -42,6 +42,11 @@ pub struct Channel {
     pub phase: bool,
     /// Sends to Main, Cue A, Cue B.
     pub sends: [Send; 3],
+    /// Expose this strip to other apps as its own PipeWire input (Mic,
+    /// Digital) or output (DAW) while lD Mixer runs. On a linked pair the
+    /// first node's flag counts.
+    #[serde(default)]
+    pub virtual_device: bool,
 }
 
 /// Persistent mixer state for one device model.
@@ -76,6 +81,7 @@ impl MixerState {
                 label: String::new(),
                 linked: node.default_linked,
                 phase: false,
+                virtual_device: false,
                 sends: if node.kind == NodeKind::Daw && i == first_daw(profile) {
                     [Send::UNITY; 3]
                 } else {
@@ -217,6 +223,32 @@ impl MixerState {
         cells
     }
 
+    /// The PipeWire devices the strips ask for, in strip order.
+    pub fn virtual_devices(&self, profile: &Profile) -> Vec<crate::vdev::Spec> {
+        self.strips()
+            .into_iter()
+            .filter(|s| self.channels[s.node].virtual_device)
+            .map(|s| {
+                let first = &profile.nodes[s.node];
+                let mut channels = vec![first.stream_channel];
+                // Stable node name from the stock names: "DAW 3"+"DAW 4" -> daw_3_4.
+                let mut slug = first.name.to_lowercase().replace(' ', "_");
+                if s.stereo {
+                    let second = &profile.nodes[s.node + 1];
+                    channels.push(second.stream_channel);
+                    slug.push('_');
+                    slug.push_str(second.name.rsplit(' ').next().unwrap_or(""));
+                }
+                crate::vdev::Spec {
+                    node_name: format!("ld_mixer_{slug}"),
+                    description: format!("{} {}", profile.name, self.strip_name(profile, s)),
+                    playback: first.kind.is_playback(),
+                    channels,
+                }
+            })
+            .collect()
+    }
+
     /// Routing writes as `(output index, code)` pairs.
     pub fn routing(&self, profile: &Profile) -> Vec<(u8, u8)> {
         let mut out = Vec::new();
@@ -235,6 +267,29 @@ impl MixerState {
         (0..profile.phase_inputs as usize)
             .map(|i| (i as u8, self.channels.get(i).map(|c| c.phase).unwrap_or(false)))
             .collect()
+    }
+
+    /// Take over a mix read back from the device. Returns false (and
+    /// changes nothing) when the read is unusable: missing, or aliased with
+    /// every row identical, which some firmware answers with.
+    pub fn apply_readback(&mut self, profile: &Profile, matrix: Option<&[i16]>, routing: &[Option<u8>]) -> bool {
+        let Some(m) = matrix else { return false };
+        let rows: Vec<&[i16]> = m.chunks(MIXER_STRIDE).collect();
+        let aliased = rows.windows(2).all(|w| w[0] == w[1])
+            && rows.first().is_some_and(|r| r.iter().any(|&c| c != protocol::RAW_MUTE));
+        if aliased || m.len() != self.channels.len() * MIXER_STRIDE {
+            return false;
+        }
+        self.import_matrix(m);
+        for (i, pair) in profile.outputs.iter().enumerate() {
+            let code = routing.get(pair.first as usize).copied().flatten();
+            if let Some(src) = code.and_then(|c| protocol::route_source_from_code(profile.route_scheme, c)) {
+                if pair.sources.contains(&src) {
+                    self.routes[i] = src;
+                }
+            }
+        }
+        true
     }
 
     /// Best-effort import of a matrix read back from the hardware, so a first
@@ -368,6 +423,24 @@ mod tests {
         let m = s.matrix();
         assert_eq!(m[mixer_cell(0, Bus::Main, 0)], 0);
         assert_eq!(m[mixer_cell(1, Bus::Main, 1)], 0, "right half audible");
+    }
+
+    #[test]
+    fn virtual_device_specs() {
+        let mut s = MixerState::default_for(id24());
+        s.channels[0].virtual_device = true; // Mic 1, mono
+        s.channels[12].virtual_device = true; // DAW 3+4, linked
+        s.channels[13].label = "ignored".into();
+        s.channels[12].label = "Discord".into();
+        let v = s.virtual_devices(id24());
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].node_name, "ld_mixer_mic_1");
+        assert_eq!(v[0].channels, vec![0]);
+        assert!(!v[0].playback);
+        assert_eq!(v[1].node_name, "ld_mixer_daw_3_4");
+        assert_eq!(v[1].description, "iD24 Discord");
+        assert_eq!(v[1].channels, vec![2, 3]);
+        assert!(v[1].playback);
     }
 
     #[test]

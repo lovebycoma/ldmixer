@@ -27,6 +27,10 @@
           nativeBuildInputs = with pkgs; [ pkg-config wrapGAppsHook4 gnumake ];
           buildInputs = with pkgs; [ gtk4 libadwaita libusb1 ];
           cargoTestFlags = [ "--lib" ];
+          # pw-loopback / pw-dump for the virtual devices.
+          preFixup = ''
+            gappsWrapperArgs+=(--prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.pipewire ]})
+          '';
           # cargo already built the binaries; install them plus data files.
           installPhase = ''
             runHook preInstall

@@ -64,7 +64,12 @@ fn parse_num(s: &str) -> Result<i64> {
 
 type Device = dyn ControlIo;
 
+/// The device, through the daemon when it runs (it owns the USB
+/// connection), directly otherwise.
 fn open(mock: bool) -> Result<Box<Device>> {
+    if ld_mixer::ipc::daemon_running() {
+        return Ok(Box::new(ld_mixer::ipc::RemoteIo::connect()?));
+    }
     device::open(mock)
 }
 

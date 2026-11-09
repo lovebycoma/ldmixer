@@ -58,34 +58,68 @@ sudo make install            # PREFIX=/usr/local by default
 
 ```sh
 ld-mixer gui                 # open the mixer (also in your application menu)
-ld-mixer gui --mock          # try the UI with a simulated iD24, no hardware needed
+ld-mixer gui --mock          # try it with a simulated iD24, no hardware needed
 ld-mixer help                # all commands
 ```
 
+### Background service and tray
+
+lD Mixer runs as a small background service that owns the interface: it
+restores your mix whenever the iD24 is plugged in, keeps the virtual devices
+alive, and shows a tray icon (left click opens the window; the menu has Dim,
+Cut, Alt, Mono, Talkback and Quit). Closing the window leaves the service
+running. `ld-mixer gui` starts it on demand; you can also manage it directly:
+
+```sh
+ld-mixer start               # start the service in the background
+ld-mixer status              # service, device and virtual devices
+ld-mixer stop                # stop it (removes the virtual devices)
+ld-mixer daemon              # run it in the foreground, e.g. from autostart
+```
+
+The tray needs a StatusNotifier host (KDE Plasma, most panels, Waybar; GNOME
+with the AppIndicator extension). Without one the service still works.
+
+### The mixer window
+
 The window mirrors the official iD Mixer: pick **Main**, **Cue A** or
 **Cue B** in the header (Ctrl+1/2/3), and the strips show that mix's
-faders, pan, mute and solo. LINK pairs two channels into a stereo strip,
-double-click a strip name to rename it, and double-click a fader or knob to
-reset it. The side panel holds the monitor section (it follows the
-front-panel knob and buttons), output routing including the loopback pair,
-and the optical port formats. Presets live in the main menu.
+faders, pan, mute and solo. The buttons at the top of each strip are:
+
+- **Ø** polarity (analog inputs), **link** to pair two channels as stereo,
+- **microphone / speaker**: show that strip to other apps as its own input
+  (Mic, Digi) or output (DAW) while lD Mixer runs, e.g. "iD24 DAW 3+4" as
+  a speaker for Discord and "iD24 DAW 1+2" for everything else. Linked
+  strips become one stereo device, unlinked ones separate mono devices, and a
+  renamed strip keeps its name ("iD24 Discord").
+
+Click any dB or pan readout (faders, master, monitor volume) to type a
+value: `-12`, `-6.5 dB`, `-inf`, `C`, `L30`, `R45`. Double-click a strip name
+to rename it, double-click a fader or knob to reset it.
+
+The side panel holds the monitor section (it follows the front-panel knob
+and buttons), output routing including the loopback pair, and the optical
+port formats. Presets live in the main menu.
 
 **Loopback.** The Loopback row picks what the iD24 sends back to the
 computer (Main, a cue, or a DAW pair); it arrives as inputs 11+12 of the
-multichannel capture device. Apps that only offer "a microphone" cannot
-select those channels, so turn on **Loopback as App Input**: while lD Mixer
-is open, an "iD24 Loopback" stereo input appears for OBS, Discord, browsers
-and so on. It is created on the fly with `pw-loopback` and disappears when
-lD Mixer closes; no PipeWire configuration is written. It needs the card's
-"Multichannel Duplex" or "Pro Audio" profile.
+multichannel capture device. Turn on **Loopback as App Input** to get an
+"iD24 Loopback" input for OBS, Discord, browsers and so on.
+
+**Virtual devices touch no configuration.** Each one is a `pw-loopback`
+process owned by the service: it exists while lD Mixer runs and disappears
+when it stops. lD Mixer never changes your default devices; pick "iD24 DAW
+1+2" as the system output in your sound settings if you want that. Inputs
+need the card's "Multichannel Duplex" or "Pro Audio" profile.
 
 On first start lD Mixer reads the current mix from the device instead of
-overwriting it. Afterwards it restores its saved state on every connect.
-Settings live in `~/.config/ld-mixer/`.
+overwriting it. Settings live in `~/.config/ld-mixer/`, the service log in
+`~/.local/state/ld-mixer/daemon.log`.
 
 Device commands for inspection and experiments (`dump`, `snapshot`,
-`restore`, `meters`, `watch`, ...) are listed by `ld-mixer help`; the ones
-that write require `--write`.
+`restore`, `meters`, `watch`, `get`, ...) are listed by `ld-mixer help`; the
+ones that write require `--write`. While the service runs they go through
+it.
 
 ## Uninstall
 

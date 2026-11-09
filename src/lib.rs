@@ -7,7 +7,25 @@
 pub mod config;
 pub mod device;
 pub mod engine;
+pub mod ipc;
+pub mod daemon;
+pub mod tray;
 pub mod mixer;
 pub mod mock;
 pub mod protocol;
-pub mod vsource;
+pub mod vdev;
+
+/// For `pre_exec`: give a child process a clean signal mask. The daemon
+/// blocks SIGTERM/SIGINT in its own threads, and a blocked mask would be
+/// inherited across exec, making children ignore those signals (including
+/// the parent-death signal that stops virtual devices).
+///
+/// # Safety
+/// Only call between fork and exec; it uses async-signal-safe calls only.
+pub unsafe fn reset_signal_mask() {
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigprocmask(libc::SIG_SETMASK, &set, std::ptr::null_mut());
+    }
+}

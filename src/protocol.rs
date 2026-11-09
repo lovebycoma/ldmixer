@@ -294,6 +294,17 @@ pub struct MixerNode {
     pub kind: NodeKind,
     /// Whether this node starts linked with the next one as a stereo pair.
     pub default_linked: bool,
+    /// Zero-based channel of the USB audio stream this node corresponds to:
+    /// a capture channel for Mic and Digital nodes (what the computer
+    /// records), a playback channel for DAW nodes (what the computer plays).
+    pub stream_channel: u8,
+}
+
+impl NodeKind {
+    /// DAW nodes are fed by the computer; the others are recorded by it.
+    pub fn is_playback(self) -> bool {
+        self == NodeKind::Daw
+    }
 }
 
 /// Everything lD Mixer knows about a model.
@@ -317,27 +328,27 @@ pub struct Profile {
     pub loopback_capture: Option<(u8, u8)>,
 }
 
-const fn n(name: &'static str, kind: NodeKind, default_linked: bool) -> MixerNode {
-    MixerNode { name, kind, default_linked }
+const fn n(name: &'static str, kind: NodeKind, default_linked: bool, stream_channel: u8) -> MixerNode {
+    MixerNode { name, kind, default_linked, stream_channel }
 }
 
 const ID24_NODES: &[MixerNode] = &[
-    n("Mic 1", NodeKind::Mic, false),
-    n("Mic 2", NodeKind::Mic, false),
-    n("Digi 1", NodeKind::Digital, true),
-    n("Digi 2", NodeKind::Digital, false),
-    n("Digi 3", NodeKind::Digital, true),
-    n("Digi 4", NodeKind::Digital, false),
-    n("Digi 5", NodeKind::Digital, true),
-    n("Digi 6", NodeKind::Digital, false),
-    n("Digi 7", NodeKind::Digital, true),
-    n("Digi 8", NodeKind::Digital, false),
-    n("DAW 1", NodeKind::Daw, true),
-    n("DAW 2", NodeKind::Daw, false),
-    n("DAW 3", NodeKind::Daw, true),
-    n("DAW 4", NodeKind::Daw, false),
-    n("DAW 5", NodeKind::Daw, true),
-    n("DAW 6", NodeKind::Daw, false),
+    n("Mic 1", NodeKind::Mic, false, 0),
+    n("Mic 2", NodeKind::Mic, false, 1),
+    n("Digi 1", NodeKind::Digital, true, 2),
+    n("Digi 2", NodeKind::Digital, false, 3),
+    n("Digi 3", NodeKind::Digital, true, 4),
+    n("Digi 4", NodeKind::Digital, false, 5),
+    n("Digi 5", NodeKind::Digital, true, 6),
+    n("Digi 6", NodeKind::Digital, false, 7),
+    n("Digi 7", NodeKind::Digital, true, 8),
+    n("Digi 8", NodeKind::Digital, false, 9),
+    n("DAW 1", NodeKind::Daw, true, 0),
+    n("DAW 2", NodeKind::Daw, false, 1),
+    n("DAW 3", NodeKind::Daw, true, 2),
+    n("DAW 4", NodeKind::Daw, false, 3),
+    n("DAW 5", NodeKind::Daw, true, 4),
+    n("DAW 6", NodeKind::Daw, false, 5),
 ];
 
 const ID24_SPEAKER_SOURCES: &[RouteSource] = &[

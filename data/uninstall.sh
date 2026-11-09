@@ -77,9 +77,10 @@ if [ "$assume_yes" -eq 0 ]; then
     case "$answer" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
 fi
 
-# Stop a running GUI so nothing holds the device or rewrites settings. The
-# bracket keeps this pattern from matching this very script's command line.
-pkill -f 'ld-mixe[r] gui' 2>/dev/null || true
+# Stop the GUI and the background service so nothing holds the device or
+# rewrites settings; stopping the service also removes its virtual devices.
+# The bracket keeps this pattern from matching this script's command line.
+pkill -f 'ld-mixe[r] (gui|daemon)' 2>/dev/null || true
 
 if [ "$keep_user" -eq 0 ]; then
     for p in $user_paths; do

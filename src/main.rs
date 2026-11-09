@@ -1,7 +1,9 @@
 //! `ld-mixer`: the single command of lD Mixer.
 //!
-//! `ld-mixer gui` opens the mixer window, `ld-mixer uninstall` removes lD
-//! Mixer, and the remaining subcommands inspect or probe the device.
+//! `ld-mixer daemon` runs the background service (device, mix, virtual
+//! devices, tray), `ld-mixer gui` opens the mixer window (starting the
+//! service if needed), `ld-mixer uninstall` removes lD Mixer, and the
+//! remaining subcommands inspect or probe the device.
 
 mod cli;
 mod gui;
@@ -18,7 +20,11 @@ fn help() {
 
 Usage: ld-mixer <command> [options]
 
-  gui                        open the mixer window
+  gui                        open the mixer window (starts the service if needed)
+  daemon                     run the background service in this terminal
+  start                      start the background service in the background
+  stop                       stop the background service (and its devices)
+  status                     show the service, device and virtual devices
   uninstall [-y] [--keep-user-data]
                              remove lD Mixer and its settings
   help                       show this help
@@ -77,7 +83,15 @@ fn main() -> ExitCode {
             }
         }
         Some("uninstall") => uninstall(&args[1..]),
-        Some(_) => match cli::run(args, mock) {
+        Some("daemon") => report(ld_mixer::daemon::run(mock)),
+        Some("start") => report(start(mock)),
+        Some("stop") => report(stop()),
+        Some("status") => report(status()),
+        Some(_) => match {
+            // Exit quietly when output is piped into `head` and the like.
+            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+            cli::run(args, mock)
+        } {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("ld-mixer: {e:#}");
@@ -85,4 +99,93 @@ fn main() -> ExitCode {
             }
         },
     }
+}
+
+fn report(r: anyhow::Result<()>) -> ExitCode {
+    match r {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("ld-mixer: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn start(mock: bool) -> anyhow::Result<()> {
+    use ld_mixer::ipc;
+    if ipc::daemon_running() {
+        println!("lD Mixer is already running");
+        return Ok(());
+    }
+    ipc::connect_or_spawn(false, mock)?;
+    println!("lD Mixer started");
+    Ok(())
+}
+
+fn stop() -> anyhow::Result<()> {
+    use ld_mixer::ipc::{self, Connection, Notice, Request};
+    if !ipc::daemon_running() {
+        println!("lD Mixer is not running");
+        return Ok(());
+    }
+    let mut c = Connection::connect(false)?;
+    c.send(&Request::Shutdown)?;
+    // Wait until the daemon has closed the socket.
+    while let Ok(Some(n)) = c.recv() {
+        if matches!(n, Notice::Quitting) {
+            break;
+        }
+    }
+    for _ in 0..30 {
+        if !ipc::daemon_running() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    println!("lD Mixer stopped");
+    Ok(())
+}
+
+fn status() -> anyhow::Result<()> {
+    use ld_mixer::ipc::{self, Connection, Notice};
+    if !ipc::daemon_running() {
+        println!("service: not running (start it with `ld-mixer start` or `ld-mixer gui`)");
+        return Ok(());
+    }
+    // A GUI hello returns the full picture, then we hang up.
+    let mut c = Connection::connect(true)?;
+    println!("service: running");
+    let mut got_vdevs = false;
+    while !got_vdevs {
+        match c.recv()? {
+            Some(Notice::Device(Some(d), _)) => println!(
+                "device:  {} (firmware {:x}.{:02x}{})",
+                d.model,
+                d.firmware >> 8,
+                d.firmware & 0xff,
+                if d.mock { ", mock" } else { "" }
+            ),
+            Some(Notice::Device(None, reason)) => {
+                println!("device:  not connected ({})", reason.unwrap_or_default())
+            }
+            Some(Notice::VirtualDevices(list)) => {
+                got_vdevs = true;
+                if list.is_empty() {
+                    println!("virtual devices: none");
+                }
+                for v in list {
+                    let kind = if v.spec.playback { "output" } else { "input" };
+                    let state = match (&v.error, v.running) {
+                        (Some(e), _) => format!("error: {e}"),
+                        (None, true) => "running".into(),
+                        (None, false) => "starting".into(),
+                    };
+                    println!("  {:<24} {kind:<6} {state}", v.spec.description);
+                }
+            }
+            Some(_) => {}
+            None => break,
+        }
+    }
+    Ok(())
 }
