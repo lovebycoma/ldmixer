@@ -80,10 +80,8 @@ button.mode-badge:hover { background-color: alpha(@view_fg_color, 0.07); color: 
 button.mix-color { min-width: 0; min-height: 0; padding: 0.4em; border-radius: 50%; }
 .mix-heard { font-size: 0.8em; color: alpha(@window_fg_color, 0.55); }
 editablelabel.mix-value { font-size: 1.5em; font-weight: 800; }
-button.mute:checked { background-color: #dc2626; color: white; }
-button.solo:checked { background-color: #eab308; color: #111; }
-button.phase:checked { background-color: @accent_bg_color; color: @accent_fg_color; }
-button.vdev:checked { background-color: @accent_bg_color; color: @accent_fg_color; }
+/* Strip buttons (Ø, device, S, M) light up white when on, like the monitor buttons. */
+button.tiny:checked { background-color: alpha(@window_fg_color, 0.85); color: @window_bg_color; }
 editablelabel.value { min-width: 0; }
 /* The edit field keeps the label's font and drops theme padding, which clipped the text's top. */
 editablelabel > stack > text { font-size: 1em; padding: 0 0.15em; margin: 0; min-height: 0; }
