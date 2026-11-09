@@ -47,7 +47,7 @@ ldmixer CLI │                ├ vdev::Manager ── pw-loopback children    
 - **IPC** (`src/ipc.rs`): newline-delimited JSON `Request`/`Notice`. `RemoteIo` implements `ControlIo` over the socket so CLI commands work while the daemon runs. `connect_or_spawn` starts the daemon on demand.
 - **Device layer** (`src/device.rs`): `ControlIo` trait with typed helpers; `UsbDevice` (real) and `mock::MockDevice` (`--mock`).
 - **Protocol tables** (`src/protocol.rs`): profiles (only the iD24 is driven), routing codes, level encoding, fader taper.
-- **Mixer model** (`src/mixer.rs`): strips, links, per-mix sends, mix names, hidden strips; computes the 96-cell matrix (mute/solo/pan/master are baked in, as the hardware has none of them). `STATE_VERSION` = 2; version 1 files are migrated (linked pairs get L100/R100).
+- **Mixer model** (`src/mixer.rs`): strips, links, per-mix sends, mix names and colors (`mix_colors`, `#rrggbb`, empty = default), hidden strips; computes the 96-cell matrix (mute/solo/pan/master are baked in, as the hardware has none of them). `STATE_VERSION` = 2; version 1 files are migrated (linked pairs get L100/R100).
 - **Virtual devices** (`src/vdev.rs`): one `pw-loopback` per device; `Manager::reconcile` keeps the running set equal to the wanted set and retries failures.
 - **Tray** (`src/tray.rs`), **CLI** (`src/cli.rs`), **entry point** (`src/main.rs`, embeds `data/uninstall.sh`).
 - **GUI** (`src/gui/mod.rs`, `src/gui/widgets.rs`): pure daemon client. It edits a copy of `MixerState` and sends it (coalesced to ~60/s).
@@ -73,8 +73,11 @@ Details and sources in `docs/PROTOCOL.md`. Verified on an iD24 (firmware 1.12):
 ## GUI notes
 
 - The fader is a `SnapArea` (render nodes, GPU); its static scale is a cached texture. A Cairo `DrawingArea` redrawn at meter rate cost ~50% CPU; the render-node version ~1%. Keep frequently redrawn widgets on render nodes, and skip redraws when nothing changed.
-- App CSS is registered at `STYLE_PROVIDER_PRIORITY_USER + 100`: the owner uses adw-gtk3, whose user `gtk.css` loads a full libadwaita stylesheet that otherwise overrides app CSS. Strip buttons have a fixed size (`TINY_W` x `TINY_H`) and drop `text-button`/`image-button`.
-- Layout: strips (edge to edge, linked pair = exactly 2 x `STRIP_W`) | Mixes accordion | Monitor column. Strip order: buttons, M/S, pans, level, meter + fader. Typed values: click any dB/pan readout.
+- App CSS is registered at `STYLE_PROVIDER_PRIORITY_USER + 100`: the owner uses adw-gtk3, whose user `gtk.css` loads a full libadwaita stylesheet that otherwise overrides app CSS. Strip buttons have a minimum size (`tiny_w()` x `tiny_h()`), fill their row, and drop `text-button`/`image-button`. Mix colors are a second, generated CSS provider (`mix_color_css`); the dot in front of each mix opens the color picker.
+- The GUI sets its own (in-process) `gtk-font-rendering` to Manual: GTK 4.24's automatic mode cut the top pixel row off glyphs at fractional scales (1.25). Check text at the owner's real scale through niri (`niri msg action screenshot-window`), not only with `LDMIXER_SCREENSHOT`, which renders at scale 1.
+- Sizes are in em, not px: CSS uses `em`, Rust uses `widgets::em()`/`emi()`, measured once at startup from the GTK font and text scale (1 em = 14.67 px at 11 pt / 96 dpi). Only hairlines stay in px.
+- Layout: strips (edge to edge, linked pair = exactly 2 x `strip_w()`) | Mixes accordion | Monitor column. Breakpoints (em-based) stack Mixes above Monitor below 90 em and tuck the side column into an overlay sidebar (header button) below 55 em. Strip order (modeled on Audient's iD Mixer): header (name, input type, top line in the open mix's color), Ø/device buttons, pans with L/R, MONO/STEREO badge (click links or unlinks the pair), S | M, level, meter + fader.
+- Stock GTK first: colors come from libadwaita named colors (`@view_bg_color`, `@accent_bg_color`, ...) and joined buttons use `.linked`; only state colors (mute, solo, cut, ...) and the drawn fader/knob parts are fixed. Typed values: click any dB/pan readout.
 
 ## Testing
 

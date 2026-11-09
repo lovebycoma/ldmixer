@@ -80,7 +80,7 @@ ldmixer help         # all commands
 
 - The first start reads the mix the interface already has. After that, lD Mixer restores its own saved mix on connect.
 - Closing the window keeps the service running in the tray. Quit from the tray, the window menu, or `ldmixer stop`.
-- Mixes: Ctrl+1/2/3 switches Main, Cue A, Cue B. Click any dB or pan readout to type a value (`-12`, `-inf`, `C`, `L30`). Right-click a strip to rename or hide it.
+- Mixes: Ctrl+1/2/3 switches Main, Cue A, Cue B. Click any dB or pan readout to type a value (`-12`, `-inf`, `C`, `L30`). Right-click a strip to rename or hide it. Click a mix's color dot to change its color, or the pencil to rename it.
 - Virtual devices: press 🎤/🔈 on a strip. Inputs and the loopback need the card profile **Multichannel Duplex** or **Pro Audio**.
 - Command-line inspection (`scan`, `dump`, `snapshot`, `meters`, `watch`, `get`) only reads. Writing commands need `--write`.
 

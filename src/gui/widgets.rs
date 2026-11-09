@@ -37,10 +37,59 @@ const TRACK: Rgb = hex(0x0f1218);
 const TICK: Rgb = hex(0x5b6474);
 const TEXT: Rgb = hex(0x8b93a3);
 const CAP: Rgb = hex(0xdfe4ec);
+/// Fader cap body, a dark gray block like a console fader.
+const CAP_TOP: Rgb = hex(0x5a5f69);
+const CAP_MID: Rgb = hex(0x40444c);
+const CAP_BOTTOM: Rgb = hex(0x2c2f35);
 const METER_BG: Rgb = hex(0x161a22);
 const METER_LOW: Rgb = hex(0x22c55e);
 const METER_MID: Rgb = hex(0xeab308);
 const METER_HIGH: Rgb = hex(0xef4444);
+
+// ---------------------------------------------------------------------------
+// Font-relative sizes
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Pixels per em: the GTK UI font's size, text scaling included.
+    static EM_PX: Cell<f64> = const { Cell::new(REF_EM_PX) };
+}
+
+/// 11 pt at 96 dpi, the size the layout was designed at.
+const REF_EM_PX: f64 = 11.0 * 96.0 / 72.0;
+
+/// Measure 1 em from the GTK font settings. Call once before building
+/// widgets; sizes are taken when widgets are built.
+pub fn init_em() {
+    let Some(settings) = gtk::Settings::default() else { return };
+    let font = settings.gtk_font_name().map(|f| gtk::pango::FontDescription::from_string(&f));
+    let px = font.and_then(|d| {
+        let size = d.size() as f64 / gtk::pango::SCALE as f64;
+        if size <= 0.0 {
+            None
+        } else if d.is_size_absolute() {
+            Some(size)
+        } else {
+            // gtk-xft-dpi is dpi * 1024 and carries the text scaling factor.
+            let dpi = settings.gtk_xft_dpi();
+            let dpi = if dpi > 0 { dpi as f64 / 1024.0 } else { 96.0 };
+            Some(size * dpi / 72.0)
+        }
+    });
+    if let Some(px) = px {
+        EM_PX.with(|e| e.set(px.clamp(8.0, 48.0)));
+    }
+}
+
+/// `x` em in pixels.
+pub fn em(x: f64) -> f64 {
+    EM_PX.with(|e| e.get()) * x
+}
+
+/// `x` em in whole pixels.
+pub fn emi(x: f64) -> i32 {
+    em(x).round() as i32
+}
 
 fn set(cr: &cairo::Context, c: Rgb) {
     cr.set_source_rgb(c.0, c.1, c.2);
@@ -175,20 +224,24 @@ pub struct Fader {
     inner: Rc<FaderInner>,
 }
 
-const FADER_TOP: f64 = 12.0;
-const FADER_BOTTOM: f64 = 12.0;
-/// Fader geometry, left to right: meters, scale labels, slot with cap.
-const METER_W: f64 = 9.0;
-const METER_GAP: f64 = 3.0;
-const LABEL_W: f64 = 15.0;
-const CAP_W: f64 = 30.0;
-const CAP_H: f64 = 16.0;
+// Fader geometry in em, left to right: meters, scale labels, slot with cap.
+fn fader_top() -> f64 { (cap_h() / 2.0 + em(0.1)).round() }
+fn fader_bottom() -> f64 { (cap_h() / 2.0 + em(0.1)).round() }
+fn meter_w() -> f64 { em(0.6).round() }
+fn meter_gap() -> f64 { em(0.2).round() }
+fn label_w() -> f64 { em(1.0) }
+fn cap_w() -> f64 { em(2.0).round() }
+fn cap_h() -> f64 { em(2.4).round() }
+/// Gap between the groups (meters, labels, slot).
+fn group_gap() -> f64 { em(0.4).round() }
+/// Width of the slot the cap runs in.
+fn slot_w() -> f64 { em(0.27).round().max(2.0) }
 const SCALE_DB: [f32; 8] = [0.0, -6.0, -12.0, -18.0, -24.0, -36.0, -48.0, -60.0];
 
 impl Fader {
     /// `channels` meters are drawn left of the slot (0 for none).
     pub fn new(channels: usize, accent: Rgb) -> Fader {
-        let area = SnapArea::new(group_width(channels).ceil() as i32 + 4, 240);
+        let area = SnapArea::new(group_width(channels).ceil() as i32 + 4, emi(8.0));
         area.set_vexpand(true);
         area.set_focusable(true);
         area.add_css_class("fader");
@@ -276,7 +329,7 @@ impl Fader {
     }
 
     fn track_len(&self) -> f64 {
-        (self.area.height() as f64 - FADER_TOP - FADER_BOTTOM).max(1.0)
+        (self.area.height() as f64 - fader_top() - fader_bottom()).max(1.0)
     }
 
     fn install(&self) {
@@ -289,9 +342,9 @@ impl Fader {
             me.area.grab_focus();
             // Clicking the slot away from the cap jumps there; grabbing the
             // cap keeps its position, so it never leaps under the pointer.
-            let cap_y = FADER_TOP + (1.0 - me.value()) * me.track_len();
-            if (y - cap_y).abs() > 12.0 {
-                me.change(1.0 - (y - FADER_TOP) / me.track_len());
+            let cap_y = fader_top() + (1.0 - me.value()) * me.track_len();
+            if (y - cap_y).abs() > cap_h() * 0.5 {
+                me.change(1.0 - (y - fader_top()) / me.track_len());
             }
             me.inner.drag_origin.set(me.value());
         });
@@ -343,24 +396,24 @@ impl Fader {
 
     /// Draw the size-dependent background (meter wells, scale, slot).
     fn draw_static(&self, cr: &cairo::Context, w: f64, h: f64) {
-        let len = (h - FADER_TOP - FADER_BOTTOM).max(1.0);
-        let ypos = |p: f64| FADER_TOP + (1.0 - p) * len;
+        let len = (h - fader_top() - fader_bottom()).max(1.0);
+        let ypos = |p: f64| fader_top() + (1.0 - p) * len;
         let channels = self.inner.meters.borrow().len();
         let (meter_x0, labels_right, slot_x) = layout(w, channels);
         for i in 0..channels {
-            let x = meter_x0 + i as f64 * (METER_W + METER_GAP);
+            let x = meter_x0 + i as f64 * (meter_w() + meter_gap());
             set(cr, METER_BG);
-            rounded_rect(cr, x, FADER_TOP, METER_W, len, 1.5);
+            rounded_rect(cr, x, fader_top(), meter_w(), len, 1.5);
             let _ = cr.fill();
         }
         cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
-        cr.set_font_size(8.5);
+        cr.set_font_size(em(0.58));
         for db in SCALE_DB {
             let y = ypos(protocol::db_to_fader(Some(db))).round() + 0.5;
             set(cr, TICK);
             cr.set_line_width(1.0);
-            cr.move_to(labels_right + 2.0, y);
-            cr.line_to(labels_right + 5.0, y);
+            cr.move_to(labels_right + group_gap() * 0.33, y);
+            cr.line_to(labels_right + group_gap() * 0.83, y);
             let _ = cr.stroke();
             let text = format!("{}", db.abs() as i32);
             if let Ok(ext) = cr.text_extents(&text) {
@@ -370,7 +423,8 @@ impl Fader {
             }
         }
         set(cr, TRACK);
-        rounded_rect(cr, slot_x - 2.0, FADER_TOP - 4.0, 4.0, len + 8.0, 2.0);
+        let sw = slot_w();
+        rounded_rect(cr, slot_x - sw / 2.0, fader_top() - sw, sw, len + 2.0 * sw, sw / 2.0);
         let _ = cr.fill();
     }
 
@@ -407,8 +461,8 @@ impl Fader {
     }
 
     fn draw(&self, snap: &gtk::Snapshot, w: f64, h: f64) {
-        let len = (h - FADER_TOP - FADER_BOTTOM).max(1.0);
-        let ypos = |p: f64| FADER_TOP + (1.0 - p) * len;
+        let len = (h - fader_top() - fader_bottom()).max(1.0);
+        let ypos = |p: f64| fader_top() + (1.0 - p) * len;
         let channels = self.inner.meters.borrow().len();
         let (meter_x0, _, slot_x) = layout(w, channels);
         let acc = self.inner.accent.get();
@@ -429,52 +483,56 @@ impl Fader {
         let meters = self.inner.meters.borrow();
         let peaks = self.inner.peaks.borrow();
         for (i, &m) in meters.iter().enumerate() {
-            let x = meter_x0 + i as f64 * (METER_W + METER_GAP);
+            let x = meter_x0 + i as f64 * (meter_w() + meter_gap());
             if m > 0.002 {
-                let top = FADER_TOP + (1.0 - m as f64) * len;
-                snap.push_rounded_clip(&rounded(x, top, METER_W, FADER_TOP + len - top, 1.5));
+                let top = fader_top() + (1.0 - m as f64) * len;
+                snap.push_rounded_clip(&rounded(x, top, meter_w(), fader_top() + len - top, 1.5));
                 snap.append_linear_gradient(
-                    &rect(x, top, METER_W, FADER_TOP + len - top),
-                    &Point::new(x as f32, (FADER_TOP + len) as f32),
-                    &Point::new(x as f32, FADER_TOP as f32),
+                    &rect(x, top, meter_w(), fader_top() + len - top),
+                    &Point::new(x as f32, (fader_top() + len) as f32),
+                    &Point::new(x as f32, fader_top() as f32),
                     &stops,
                 );
                 snap.pop();
             }
             let p = peaks[i].0;
             if p > 0.01 {
-                let y = (FADER_TOP + (1.0 - p as f64) * len).round();
-                snap.append_color(&rgba(if p > 0.95 { METER_HIGH } else { CAP }, 1.0), &rect(x, y, METER_W, 1.0));
+                let y = (fader_top() + (1.0 - p as f64) * len).round();
+                snap.append_color(&rgba(if p > 0.95 { METER_HIGH } else { CAP }, 1.0), &rect(x, y, meter_w(), 1.0));
             }
         }
         drop((meters, peaks));
 
         // Slot fill below the cap, in the mix's accent color.
-        snap.push_rounded_clip(&rounded(slot_x - 2.0, ypos(v), 4.0, FADER_TOP + len - ypos(v) + 4.0, 2.0));
-        snap.append_color(&rgba(acc, 0.85), &rect(slot_x - 2.0, ypos(v), 4.0, FADER_TOP + len - ypos(v) + 4.0));
+        let sw = slot_w();
+        let fill = fader_top() + len - ypos(v) + sw;
+        snap.push_rounded_clip(&rounded(slot_x - sw / 2.0, ypos(v), sw, fill, sw / 2.0));
+        snap.append_color(&rgba(acc, 0.85), &rect(slot_x - sw / 2.0, ypos(v), sw, fill));
         snap.pop();
 
         // Cap: shadow, body, accent line.
         let cy = ypos(v);
-        let (cx, top) = (slot_x - CAP_W / 2.0, cy - CAP_H / 2.0);
-        snap.push_rounded_clip(&rounded(cx, top + 2.0, CAP_W, CAP_H, 4.0));
-        snap.append_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.45), &rect(cx, top + 2.0, CAP_W, CAP_H));
+        let (cx, top) = (slot_x - cap_w() / 2.0, cy - cap_h() / 2.0);
+        let (radius, shadow, inset) = (em(0.27), em(0.14).round(), em(0.27).round());
+        snap.push_rounded_clip(&rounded(cx, top + shadow, cap_w(), cap_h(), radius));
+        snap.append_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.45), &rect(cx, top + shadow, cap_w(), cap_h()));
         snap.pop();
-        snap.push_rounded_clip(&rounded(cx, top, CAP_W, CAP_H, 4.0));
+        snap.push_rounded_clip(&rounded(cx, top, cap_w(), cap_h(), radius));
         snap.append_linear_gradient(
-            &rect(cx, top, CAP_W, CAP_H),
+            &rect(cx, top, cap_w(), cap_h()),
             &Point::new(cx as f32, top as f32),
-            &Point::new(cx as f32, (top + CAP_H) as f32),
+            &Point::new(cx as f32, (top + cap_h()) as f32),
             &[
-                ColorStop::new(0.0, rgba(CAP, 1.0)),
-                ColorStop::new(1.0, rgba((CAP.0 * 0.72, CAP.1 * 0.72, CAP.2 * 0.75), 1.0)),
+                ColorStop::new(0.0, rgba(CAP_TOP, 1.0)),
+                ColorStop::new(0.5, rgba(CAP_MID, 1.0)),
+                ColorStop::new(1.0, rgba(CAP_BOTTOM, 1.0)),
             ],
         );
         snap.pop();
-        snap.append_color(&rgba(acc, 1.0), &rect(cx + 4.0, cy - 1.0, CAP_W - 8.0, 2.0));
+        snap.append_color(&rgba(acc, 1.0), &rect(cx + inset, cy - 1.0, cap_w() - 2.0 * inset, 2.0));
 
         if self.area.has_focus() {
-            let ring = rounded(cx - 1.5, top - 1.5, CAP_W + 3.0, CAP_H + 3.0, 5.0);
+            let ring = rounded(cx - 1.5, top - 1.5, cap_w() + 3.0, cap_h() + 3.0, radius + 1.5);
             let c = rgba(acc, 0.6);
             snap.append_border(&ring, &[1.0; 4], &[c, c, c, c]);
         }
@@ -484,8 +542,8 @@ impl Fader {
 /// Width of the meters + scale + slot group.
 fn group_width(channels: usize) -> f64 {
     let n = channels as f64;
-    let meters = if channels > 0 { n * METER_W + (n - 1.0) * METER_GAP + 6.0 } else { 0.0 };
-    meters + LABEL_W + 6.0 + CAP_W
+    let meters = if channels > 0 { n * meter_w() + (n - 1.0) * meter_gap() + group_gap() } else { 0.0 };
+    meters + label_w() + group_gap() + cap_w()
 }
 
 /// `(first meter x, right edge of the scale labels, slot center)`, with
@@ -493,9 +551,9 @@ fn group_width(channels: usize) -> f64 {
 fn layout(w: f64, channels: usize) -> (f64, f64, f64) {
     let x0 = ((w - group_width(channels)) / 2.0).max(2.0).round();
     let n = channels as f64;
-    let meters = if channels > 0 { n * METER_W + (n - 1.0) * METER_GAP + 6.0 } else { 0.0 };
-    let labels_right = x0 + meters + LABEL_W;
-    let slot_x = (labels_right + 6.0 + CAP_W / 2.0).round();
+    let meters = if channels > 0 { n * meter_w() + (n - 1.0) * meter_gap() + group_gap() } else { 0.0 };
+    let labels_right = x0 + meters + label_w();
+    let slot_x = (labels_right + group_gap() + cap_w() / 2.0).round();
     (x0, labels_right, slot_x)
 }
 
@@ -592,7 +650,7 @@ impl Knob {
             let fine = g
                 .current_event_state()
                 .contains(gtk::gdk::ModifierType::SHIFT_MASK);
-            let travel = if fine { 900.0 } else { 180.0 };
+            let travel = if fine { em(60.0) } else { em(12.0) };
             me.change(me.inner.drag_origin.get() + (dx - dy) / travel);
         });
         self.area.add_controller(drag);
@@ -631,13 +689,39 @@ impl Knob {
 
     fn draw(&self, cr: &cairo::Context, w: f64, h: f64) {
         let (cx, cy) = (w / 2.0, h / 2.0);
-        let r = w.min(h) / 2.0 - 3.0;
+        let outer = w.min(h) / 2.0 - 1.0;
+        // Tick ring outside the arc, like a hardware knob's scale.
+        let tick = (outer * 0.13).max(2.0);
+        let r = outer - tick - (outer * 0.06).max(1.5);
         let ring = (r * 0.16).clamp(2.5, 7.0);
         let acc = self.inner.accent.get();
         let v = self.value();
         let angle = |p: f64| ARC_START + p * ARC_SWEEP;
 
         cr.set_line_cap(cairo::LineCap::Round);
+        set(cr, TICK);
+        cr.set_line_width(1.0);
+        for i in 0..=10 {
+            let a = angle(i as f64 / 10.0);
+            cr.move_to(cx + a.cos() * (outer - tick), cy + a.sin() * (outer - tick));
+            cr.line_to(cx + a.cos() * outer, cy + a.sin() * outer);
+            let _ = cr.stroke();
+        }
+        // End labels below the arc: L / R for pan, -inf / 0 for levels.
+        let (left, right) = if self.inner.bipolar { ("L", "R") } else { ("−∞", "0") };
+        cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
+        cr.set_font_size((outer * 0.3).clamp(em(0.55), em(0.75)));
+        set(cr, TEXT);
+        for (text, a) in [(left, angle(0.0)), (right, angle(1.0))] {
+            if let Ok(ext) = cr.text_extents(text) {
+                let (x, y) = (cx + a.cos() * outer, cy + a.sin() * outer);
+                cr.move_to(x - ext.width() / 2.0 - ext.x_bearing(), (y + ext.height()).min(h - 1.0));
+                let _ = cr.show_text(text);
+            }
+        }
+        // show_text leaves a current point; the arc below must not join it.
+        cr.new_path();
+
         cr.set_line_width(ring);
         set(cr, TRACK);
         cr.arc(cx, cy, r - ring / 2.0, angle(0.0), angle(1.0));

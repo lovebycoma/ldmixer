@@ -27,16 +27,12 @@ use ldmixer::vdev;
 use ldmixer::mixer::{MixerState, Send, Strip};
 use ldmixer::protocol::{self, monitor, Bus, NodeKind, Profile, RouteSource};
 
-use widgets::{hex, Fader, Knob, Rgb};
+use widgets::{emi, hex, Fader, Knob, Rgb};
 
 pub use ldmixer::APP_ID;
 
-fn accent(bus: Bus) -> Rgb {
-    match bus {
-        Bus::Main => hex(0x2dd4bf),
-        Bus::CueA => hex(0xf59e0b),
-        Bus::CueB => hex(0xa78bfa),
-    }
+fn accent(st: &MixerState, bus: Bus) -> Rgb {
+    hex(st.mix_color(bus))
 }
 
 fn bus_name(bus: Bus) -> &'static str {
@@ -51,50 +47,68 @@ fn bus_from_name(name: &str) -> Option<Bus> {
     Bus::ALL.into_iter().find(|b| bus_name(*b) == name)
 }
 
+// Sizes are in em so the layout follows the user's font and text scale;
+// only hairlines stay in px. Mix colors come from `mix_color_css`.
 const CSS: &str = r#"
-.mixer-body { background-color: #12151b; }
-.strips { }
+/* Colors come from the theme (libadwaita named colors), so lD Mixer looks
+   like a stock GTK app; only state colors (mute, solo, ...) are fixed. */
+.mixer-body { background-color: @view_bg_color; }
 .strip {
-  background-color: #1a1e26;
-  border-right: 1px solid #2a303b;
-  border-radius: 0;
+  background-color: @view_bg_color;
+  border-right: 1px solid alpha(@view_fg_color, 0.1);
 }
-.strip.stereo { background-color: #1c2029; }
-.strip-name { font-weight: 700; font-size: 0.85em; }
-.strip-sub { font-size: 0.72em; color: #8b93a3; }
-.value { font-size: 0.75em; font-feature-settings: "tnum"; color: #c9d1dc; }
-.chip { min-height: 4px; border-radius: 0; }
-.kind-mic .chip { background-color: #f87171; }
-.kind-digital .chip { background-color: #60a5fa; }
-.kind-daw .chip { background-color: #34d399; }
-button.tiny { min-height: 0; min-width: 0; padding: 0; margin: 0; font-size: 0.75em; font-weight: 700; }
-.mix-dot { min-width: 10px; min-height: 10px; border-radius: 5px; }
-.mix-dot.main { background-color: #2dd4bf; }
-.mix-dot.cuea { background-color: #f59e0b; }
-.mix-dot.cueb { background-color: #a78bfa; }
-.mix-heard { font-size: 0.8em; color: #8b93a3; }
+.strip-head {
+  background-color: alpha(@view_fg_color, 0.05);
+  border-top: 0.2em solid transparent;
+  border-bottom: 1px solid alpha(@view_fg_color, 0.1);
+  padding: 0.75em 0.4em 0.65em 0.4em;
+}
+.strip-name { font-weight: 700; font-size: 1.05em; }
+.strip-sub { font-size: 0.72em; color: alpha(@view_fg_color, 0.55); }
+.value { font-size: 0.75em; font-feature-settings: "tnum"; color: alpha(@view_fg_color, 0.8); }
+button.tiny { min-height: 0; min-width: 0; padding: 0; margin: 0; font-size: 0.72em; font-weight: 700; letter-spacing: 0.04em; }
+button.mode-badge {
+  min-height: 0; min-width: 0; padding: 0.15em 0.55em; margin: 0;
+  font-size: 0.62em; font-weight: 700; letter-spacing: 0.08em;
+  color: alpha(@view_fg_color, 0.6);
+  background: none;
+  border: 1px solid alpha(@view_fg_color, 0.2);
+  border-radius: 0.35em;
+}
+button.mode-badge:hover { background-color: alpha(@view_fg_color, 0.07); color: @view_fg_color; }
+.mix-dot { min-width: 0.75em; min-height: 0.75em; border-radius: 50%; }
+button.mix-color { min-width: 0; min-height: 0; padding: 0.4em; border-radius: 50%; }
+.mix-heard { font-size: 0.8em; color: alpha(@window_fg_color, 0.55); }
 editablelabel.mix-value { font-size: 1.5em; font-weight: 800; }
 button.mute:checked { background-color: #dc2626; color: white; }
 button.solo:checked { background-color: #eab308; color: #111; }
-button.phase:checked { background-color: #3b82f6; color: white; }
-button.link-toggle:checked { background-color: #64748b; color: white; }
-button.vdev:checked { background-color: #0ea5e9; color: white; }
+button.phase:checked { background-color: @accent_bg_color; color: @accent_fg_color; }
+button.vdev:checked { background-color: @accent_bg_color; color: @accent_fg_color; }
 editablelabel.value { min-width: 0; }
-/* Something clips the label tight to its box; at fractional scales (1.25) that cut the top row of pixels. */
-editablelabel.value > stack > label { padding-top: 2px; }
 /* The edit field keeps the label's font and drops theme padding, which clipped the text's top. */
-editablelabel > stack > text { font-size: 1em; padding: 0 2px; margin: 0; min-height: 0; }
-button.monitor-toggle { min-height: 34px; font-weight: 800; font-size: 0.85em; }
-button.monitor-toggle:checked { background-color: #e5e7eb; color: #111; }
+editablelabel > stack > text { font-size: 1em; padding: 0 0.15em; margin: 0; min-height: 0; }
+button.monitor-toggle { min-height: 2.3em; font-weight: 800; font-size: 0.85em; letter-spacing: 0.04em; }
+button.monitor-toggle:checked { background-color: alpha(@window_fg_color, 0.85); color: @window_bg_color; }
 button.monitor-toggle.cut:checked { background-color: #dc2626; color: white; }
 button.monitor-toggle.dim:checked { background-color: #f59e0b; color: #111; }
 button.monitor-toggle.talk:checked { background-color: #22c55e; color: #111; }
 .monitor-volume { font-size: 1.6em; font-weight: 800; font-feature-settings: "tnum"; }
-.side-panel { background-color: #161a21; }
-window.bus-main .bus-accent { color: #2dd4bf; }
-window.bus-cuea .bus-accent { color: #f59e0b; }
-window.bus-cueb .bus-accent { color: #a78bfa; }
 "#;
+
+/// CSS for the mixes' colors: list dots, the open mix's title, strip headers.
+fn mix_color_css(st: &MixerState) -> String {
+    Bus::ALL
+        .iter()
+        .map(|&b| {
+            let (n, c) = (bus_name(b), st.mix_color(b));
+            format!(
+                ".mix-dot.{n} {{ background-color: #{c:06x}; }}\n\
+                 .mix-row.active.{n} label.title {{ color: #{c:06x}; }}\n\
+                 window.bus-{n} .strip-head {{ border-top-color: #{c:06x}; }}\n"
+            )
+        })
+        .collect()
+}
 
 /// Start the GUI. Blocks until the window closes.
 pub fn run(mock: bool) -> glib::ExitCode {
@@ -108,6 +122,14 @@ pub fn run(mock: bool) -> glib::ExitCode {
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
         let provider = gtk::CssProvider::new();
         provider.load_from_string(CSS);
+        widgets::init_em();
+        // GTK's automatic font rendering cut the top pixel row off glyphs
+        // at fractional scales (seen with GTK 4.24 at 1.25). Manual mode
+        // renders with the user's own font settings instead. This changes
+        // only lD Mixer's in-process GtkSettings, nothing on the system.
+        if let Some(st) = gtk::Settings::default() {
+            st.set_gtk_font_rendering(gtk::FontRendering::Manual);
+        }
         if let Some(display) = gdk::Display::default() {
             // Above user priority: themes such as adw-gtk3 install a full
             // stylesheet as the user's gtk.css, which would otherwise win over
@@ -152,13 +174,25 @@ struct MixRow {
     heard: gtk::Label,
 }
 
-/// Size of every strip button (Ø, link, device, mute, solo), fixed so they
-/// line up whatever the theme does to icon or label buttons.
-const TINY_W: i32 = 28;
-const TINY_H: i32 = 24;
+/// Minimum size of every strip button (Ø, link, device, mute, solo), fixed
+/// so they line up whatever the theme does to icon or label buttons; the
+/// rows stretch them to the strip's width.
+fn tiny_w() -> i32 {
+    emi(1.9)
+}
+fn tiny_h() -> i32 {
+    emi(1.9)
+}
 
 /// Width of a mono strip; a linked strip is exactly two of them.
-const STRIP_W: i32 = 92;
+fn strip_w() -> i32 {
+    emi(7.5)
+}
+
+/// Width of the side columns (Mixes, Monitor).
+fn column_w() -> i32 {
+    emi(23.0)
+}
 
 /// Widgets that live for the whole window.
 struct Ui {
@@ -208,6 +242,8 @@ struct App {
     me: OnceCell<std::rc::Weak<App>>,
     /// A state update is queued (sends are coalesced to ~60 per second).
     commit_pending: Cell<bool>,
+    /// The mixes' colors as CSS (see [`mix_color_css`]).
+    color_css: gtk::CssProvider,
 }
 
 impl App {
@@ -230,6 +266,7 @@ impl App {
             vdevs: RefCell::new(Vec::new()),
             me: OnceCell::new(),
             commit_pending: Cell::new(false),
+            color_css: gtk::CssProvider::new(),
         });
         let _ = app.me.set(Rc::downgrade(&app));
         app.build_ui();
@@ -332,10 +369,15 @@ impl App {
         let window = adw::ApplicationWindow::builder()
             .application(&self.gapp)
             .title("lD Mixer")
-            .default_width(1700)
-            .default_height(780)
+            .default_width(emi(116.0))
+            .default_height(emi(53.0))
             .build();
         window.add_css_class("bus-main");
+        gtk::style_context_add_provider_for_display(
+            &WidgetExt::display(&window),
+            &self.color_css,
+            gtk::STYLE_PROVIDER_PRIORITY_USER + 100,
+        );
 
         let header = adw::HeaderBar::new();
         let title = adw::WindowTitle::new("lD Mixer", "Connecting…");
@@ -363,7 +405,7 @@ impl App {
         strips_box.add_css_class("strips");
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .vscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
             .hexpand(true)
             .child(&strips_box)
             .build();
@@ -380,10 +422,22 @@ impl App {
                 .title(format!("{} Mix", bus.label()))
                 .subtitle("Master 0.0 dB")
                 .build();
-            let dot = gtk::Box::builder().valign(gtk::Align::Center).build();
+            // The color dot doubles as the color picker.
+            let dot = gtk::Box::builder().halign(gtk::Align::Center).valign(gtk::Align::Center).build();
             dot.add_css_class("mix-dot");
             dot.add_css_class(bus_name(bus));
-            row.add_prefix(&dot);
+            let color = gtk::Button::builder()
+                .child(&dot)
+                .valign(gtk::Align::Center)
+                .tooltip_text("Change the color of this mix")
+                .build();
+            color.add_css_class("flat");
+            color.add_css_class("mix-color");
+            let a = self.clone();
+            color.connect_clicked(move |_| a.mix_color_dialog(bus));
+            row.add_prefix(&color);
+            row.add_css_class("mix-row");
+            row.add_css_class(bus_name(bus));
             let rename = gtk::Button::builder()
                 .icon_name("document-edit-symbolic")
                 .tooltip_text("Rename this mix")
@@ -396,13 +450,13 @@ impl App {
 
             let content = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
-                .spacing(8)
-                .margin_top(14)
-                .margin_bottom(14)
-                .margin_start(12)
-                .margin_end(12)
+                .spacing(emi(0.55))
+                .margin_top(emi(1.0))
+                .margin_bottom(emi(1.0))
+                .margin_start(emi(0.8))
+                .margin_end(emi(0.8))
                 .build();
-            let knob = Knob::new(120, false, 1.0, accent(bus));
+            let knob = Knob::new(emi(8.2), false, 1.0, accent(&self.state.borrow(), bus));
             knob.area.set_tooltip_text(Some("Mix master level"));
             let value = value_entry("0.0 dB");
             value.add_css_class("mix-value");
@@ -447,20 +501,15 @@ impl App {
         }
         let left_panel = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(18)
-            .margin_start(14)
-            .margin_end(14)
-            .margin_top(14)
-            .margin_bottom(14)
+            .spacing(emi(1.25))
+            .margin_start(emi(1.0))
+            .margin_end(emi(1.0))
+            .margin_top(emi(1.0))
+            .margin_bottom(emi(1.0))
             .build();
         left_panel.append(&mix_group);
-        let left_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .width_request(340)
-            .hexpand(false)
-            .child(&adw::Clamp::builder().maximum_size(360).tightening_threshold(360).child(&left_panel).build())
-            .build();
-        left_scroll.add_css_class("side-panel");
+        // The column is `column_w()` wide, margins included.
+        left_panel.set_width_request(column_w() - 2 * emi(1.0));
 
         let mixer_area = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         mixer_area.add_css_class("mixer-body");
@@ -470,21 +519,21 @@ impl App {
         // Side panel.
         let panel = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(18)
-            .margin_start(14)
-            .margin_end(14)
-            .margin_top(14)
-            .margin_bottom(14)
+            .spacing(emi(1.25))
+            .margin_start(emi(1.0))
+            .margin_end(emi(1.0))
+            .margin_top(emi(1.0))
+            .margin_bottom(emi(1.0))
             .build();
 
         // Monitor section.
         let mon_group = adw::PreferencesGroup::builder().title("Monitor").build();
         let mon_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(10)
-            .margin_top(6)
+            .spacing(emi(0.7))
+            .margin_top(emi(0.4))
             .build();
-        let mon_knob = Knob::new(128, false, protocol::db_to_fader(Some(-20.0)), hex(0xe5e7eb));
+        let mon_knob = Knob::new(emi(8.75), false, protocol::db_to_fader(Some(-20.0)), hex(0xe5e7eb));
         mon_knob.area.set_tooltip_text(Some("Monitor volume (follows the front-panel knob)"));
         let mon_label = value_entry("–");
         mon_label.add_css_class("monitor-volume");
@@ -515,19 +564,20 @@ impl App {
             a.send(Request::Monitor(MonitorCmd::Level(monitor::VOLUME, db)));
         });
 
-        let grid = gtk::Grid::builder()
-            .column_spacing(6)
-            .row_spacing(6)
-            .column_homogeneous(true)
-            .build();
+        // Two joined rows, laid out like the official mixer's monitor buttons.
+        let grid = gtk::Box::new(gtk::Orientation::Vertical, emi(0.4));
+        let rows = [linked_row(), linked_row()];
+        for r in &rows {
+            grid.append(r);
+        }
         let mut mon_buttons = Vec::new();
         let toggles: Vec<(u8, &str, &str, &str, bool)> = vec![
+            (monitor::TALKBACK, "TALK", "talk", "Talkback into the cue mixes", self.profile.has_talkback),
+            (monitor::POLARITY, "Ø", "polarity", "Invert the polarity of one monitor side", true),
+            (monitor::MONO, "MONO", "mono", "Sum the monitors to mono", true),
+            (monitor::ALT, "ALT", "alt", "Switch to the alternate speakers", self.profile.has_alt),
             (monitor::DIM, "DIM", "dim", "Dim the monitors by the dim level", true),
             (monitor::CUT, "CUT", "cut", "Mute the monitors", true),
-            (monitor::ALT, "ALT", "alt", "Switch to the alternate speakers", self.profile.has_alt),
-            (monitor::TALKBACK, "TALK", "talk", "Talkback into the cue mixes", self.profile.has_talkback),
-            (monitor::MONO, "MONO", "mono", "Sum the monitors to mono", true),
-            (monitor::POLARITY, "Ø", "polarity", "Invert the polarity of one monitor side", true),
         ];
         for (i, (sel, label, class, tip, available)) in toggles.into_iter().enumerate() {
             let b = gtk::ToggleButton::with_label(label);
@@ -541,7 +591,7 @@ impl App {
                     a.send(Request::Monitor(MonitorCmd::Bool(sel, b.is_active())));
                 }
             });
-            grid.attach(&b, (i % 3) as i32, (i / 3) as i32, 1, 1);
+            rows[i / 3].append(&b);
             mon_buttons.push((sel, b));
         }
         mon_box.append(&grid);
@@ -667,29 +717,73 @@ impl App {
         panel.append(&mon_opts);
         panel.append(&out_group);
         panel.append(&sys_group);
-        // Clamp keeps the panel narrow; the strips get the remaining width.
-        let clamp = adw::Clamp::builder()
-            .maximum_size(360)
-            .tightening_threshold(360)
-            .child(&panel)
-            .build();
-        let panel_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .width_request(340)
-            .hexpand(false)
-            .child(&clamp)
-            .build();
-        panel_scroll.add_css_class("side-panel");
+        panel.set_width_request(column_w() - 2 * emi(1.0));
 
-        let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        body.append(&mixer_area);
-        body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-        body.append(&left_scroll);
-        body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-        body.append(&panel_scroll);
+        // The two side columns: side by side on wide windows, stacked on
+        // narrower ones (see the breakpoints below).
+        let side_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let column_sep = gtk::Separator::new(gtk::Orientation::Vertical);
+        side_box.append(&left_panel);
+        side_box.append(&column_sep);
+        side_box.append(&panel);
+        let side_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .child(&side_box)
+            .build();
+        let sidebar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        sidebar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        sidebar.append(&side_scroll);
+
+        let two_columns = (2 * column_w() + 2) as f64;
+        let split = adw::OverlaySplitView::builder()
+            .content(&mixer_area)
+            .sidebar(&sidebar)
+            .sidebar_position(gtk::PackType::End)
+            .sidebar_width_fraction(1.0)
+            .min_sidebar_width(two_columns)
+            .max_sidebar_width(two_columns)
+            .build();
+        // Shows the side panel when it is tucked away (narrow windows).
+        let sidebar_button = gtk::ToggleButton::builder()
+            .icon_name("sidebar-show-right-symbolic")
+            .tooltip_text("Mixes and Monitor")
+            .visible(false)
+            .build();
+        split
+            .bind_property("show-sidebar", &sidebar_button, "active")
+            .bidirectional()
+            .sync_create()
+            .build();
+        header.pack_end(&sidebar_button);
+
+        // Breakpoints, in em so they follow the font size like the layout.
+        let one_column = (column_w() + 1) as f64;
+        let max_width = |w: f64| {
+            adw::BreakpointCondition::new_length(adw::BreakpointConditionLengthType::MaxWidth, emi(w) as f64, adw::LengthUnit::Px)
+        };
+        let stacked = |bp: &adw::Breakpoint| {
+            bp.add_setter(&side_box, "orientation", Some(&gtk::Orientation::Vertical.to_value()));
+            bp.add_setter(&column_sep, "orientation", Some(&gtk::Orientation::Horizontal.to_value()));
+            bp.add_setter(&split, "min-sidebar-width", Some(&one_column.to_value()));
+            bp.add_setter(&split, "max-sidebar-width", Some(&one_column.to_value()));
+        };
+        // Medium: one side column, Mixes above Monitor.
+        let medium = adw::Breakpoint::new(max_width(90.0));
+        stacked(&medium);
+        window.add_breakpoint(medium);
+        // Narrow: the strips get the window; the side column slides over them.
+        let narrow = adw::Breakpoint::new(max_width(55.0));
+        stacked(&narrow);
+        narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
+        narrow.add_setter(&split, "show-sidebar", Some(&false.to_value()));
+        narrow.add_setter(&sidebar_button, "visible", Some(&true.to_value()));
+        window.add_breakpoint(narrow);
+        // Breakpoints need a minimum size; smaller content scrolls.
+        window.set_size_request(emi(24.0), emi(26.0));
 
         let toasts = adw::ToastOverlay::new();
-        toasts.set_child(Some(&body));
+        toasts.set_child(Some(&split));
         toolbar.set_content(Some(&toasts));
         window.set_content(Some(&toolbar));
 
@@ -748,18 +842,14 @@ impl App {
         let b = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(0)
-            .width_request(if strip.stereo { 2 * STRIP_W } else { STRIP_W })
+            .width_request(if strip.stereo { 2 * strip_w() } else { strip_w() })
             .build();
         b.add_css_class("strip");
-        b.add_css_class(match kind {
-            NodeKind::Mic => "kind-mic",
-            NodeKind::Digital => "kind-digital",
-            NodeKind::Daw => "kind-daw",
-        });
         if strip.stereo {
             b.add_css_class("stereo");
         }
 
+        // Header: name and input type, under a line in the open mix's color.
         let name = gtk::Label::builder()
             .label(self.state.borrow().strip_name(self.profile, strip))
             .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -767,10 +857,6 @@ impl App {
             .tooltip_text("Double-click to rename")
             .build();
         name.add_css_class("strip-name");
-        name.set_margin_top(9);
-        name.set_margin_bottom(7);
-        name.set_margin_start(4);
-        name.set_margin_end(4);
         let click = gtk::GestureClick::new();
         let a = self.clone();
         click.connect_pressed(move |_, n, _, _| {
@@ -779,8 +865,6 @@ impl App {
             }
         });
         name.add_controller(click);
-        let chip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        chip.add_css_class("chip");
         let sub = gtk::Label::new(Some(match (kind, strip.stereo) {
             (NodeKind::Mic, false) => "Mic / Line",
             (NodeKind::Mic, true) => "Mic / Line St",
@@ -790,23 +874,16 @@ impl App {
             (NodeKind::Daw, true) => "DAW Stereo",
         }));
         sub.add_css_class("strip-sub");
+        let head = gtk::Box::new(gtk::Orientation::Vertical, emi(0.1));
+        head.add_css_class("strip-head");
+        head.append(&name);
+        head.append(&sub);
 
-        // Phase and link buttons.
-        // Button rows fill the strip; buttons share the width equally.
-        let tools = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(4)
-            .homogeneous(true)
-            .build();
+        // Polarity and device buttons, joined and filling the strip.
+        let tools = linked_row();
         let phase_inputs = self.profile.phase_inputs as usize;
         if node < phase_inputs {
-            let phase = gtk::ToggleButton::with_label("Ø");
-            phase.add_css_class("tiny");
-            phase.set_size_request(TINY_W, TINY_H);
-            // No theme padding rules for text/icon buttons: one size for all.
-            phase.remove_css_class("text-button");
-            phase.remove_css_class("image-button");
-            phase.add_css_class("phase");
+            let phase = tiny_toggle("Ø", "phase");
             phase.set_tooltip_text(Some("Polarity invert"));
             phase.set_active(self.state.borrow().channels[node].phase);
             let a = self.clone();
@@ -822,39 +899,13 @@ impl App {
             });
             tools.append(&phase);
         }
-        if node % 2 == 0 && node + 1 < self.profile.nodes.len() {
-            let link = gtk::ToggleButton::builder().child(&link_icon()).build();
-            link.add_css_class("tiny");
-            link.set_size_request(TINY_W, TINY_H);
-            // No theme padding rules for text/icon buttons: one size for all.
-            link.remove_css_class("text-button");
-            link.remove_css_class("image-button");
-            link.add_css_class("link-toggle");
-            link.set_tooltip_text(Some("Link with the next channel as a stereo pair"));
-            link.set_active(strip.stereo);
-            let a = self.clone();
-            link.connect_toggled(move |l| {
-                let on = l.is_active();
-                a.state.borrow_mut().set_linked(node, on);
-                a.commit();
-                // Rebuild after this handler returns; it destroys this button.
-                let a = a.clone();
-                glib::idle_add_local_once(move || a.rebuild_strips());
-            });
-            tools.append(&link);
-        }
         // Expose this strip to other apps as its own PipeWire device.
         let playback = kind.is_playback();
         let vdev_btn = gtk::ToggleButton::builder()
             .icon_name(if playback { "audio-speakers-symbolic" } else { "audio-input-microphone-symbolic" })
             .active(self.state.borrow().channels[node].virtual_device)
             .build();
-        vdev_btn.add_css_class("tiny");
-        vdev_btn.set_size_request(TINY_W, TINY_H);
-        // No theme padding rules for text/icon buttons: one size for all.
-        vdev_btn.remove_css_class("text-button");
-        vdev_btn.remove_css_class("image-button");
-        vdev_btn.add_css_class("vdev");
+        make_tiny(vdev_btn.upcast_ref(), "vdev");
         vdev_btn.set_tooltip_text(Some(if playback {
             "Show as its own output (speaker) in other apps while lD Mixer runs"
         } else {
@@ -874,15 +925,13 @@ impl App {
         let pan_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .homogeneous(true)
-            // Breathing room above (mute/solo) and below (level readout).
-            .margin_top(6)
-            .margin_bottom(10)
+            .margin_top(emi(0.2))
             .build();
         let mut pans = Vec::new();
         let channels = if strip.stereo { 2 } else { 1 };
         for (k, ch) in (node..node + channels).enumerate() {
-            let col = gtk::Box::new(gtk::Orientation::Vertical, 8);
-            let knob = Knob::new(38, true, if strip.stereo { k as f64 } else { 0.5 }, accent(bus));
+            let col = gtk::Box::new(gtk::Orientation::Vertical, emi(0.3));
+            let knob = Knob::new(emi(3.8), true, if strip.stereo { k as f64 } else { 0.5 }, accent(&self.state.borrow(), bus));
             knob.area.set_tooltip_text(Some(match (strip.stereo, k) {
                 (false, _) => "Pan",
                 (true, 0) => "Pan of the left channel",
@@ -911,41 +960,57 @@ impl App {
             });
             pans.push((ch, knob, label));
         }
-        let fader = Fader::new(if strip.stereo { 2 } else { 1 }, accent(bus));
+
+        // MONO / STEREO badge between two rules; clicking it links or
+        // unlinks the pair (an odd channel links with the one before it).
+        let mode = gtk::Box::new(gtk::Orientation::Horizontal, emi(0.4));
+        let rule = || {
+            let s = gtk::Separator::new(gtk::Orientation::Horizontal);
+            s.set_hexpand(true);
+            s.set_valign(gtk::Align::Center);
+            s
+        };
+        let badge = gtk::Button::with_label(if strip.stereo { "STEREO" } else { "MONO" });
+        badge.add_css_class("mode-badge");
+        badge.remove_css_class("text-button");
+        let pair_start = node & !1;
+        if pair_start + 1 < self.profile.nodes.len() {
+            badge.set_tooltip_text(Some(if strip.stereo { "Unlink into two mono channels" } else { "Link with its neighbor as a stereo pair" }));
+            let a = self.clone();
+            badge.connect_clicked(move |_| {
+                a.state.borrow_mut().set_linked(pair_start, !strip.stereo);
+                a.commit();
+                // Rebuild after this handler returns; it destroys this button.
+                let a = a.clone();
+                glib::idle_add_local_once(move || a.rebuild_strips());
+            });
+        } else {
+            badge.set_sensitive(false);
+        }
+        mode.append(&rule());
+        mode.append(&badge);
+        mode.append(&rule());
+
+        let fader = Fader::new(if strip.stereo { 2 } else { 1 }, accent(&self.state.borrow(), bus));
         let db_label = value_entry("-inf");
         db_label.set_tooltip_text(Some("Click to type a level in dB (e.g. -12, -inf)"));
 
-        let ms = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(4)
-            .homogeneous(true)
-            .build();
-        let mute = gtk::ToggleButton::with_label("M");
-        mute.add_css_class("tiny");
-        mute.set_size_request(TINY_W, TINY_H);
-        // No theme padding rules for text/icon buttons: one size for all.
-        mute.remove_css_class("text-button");
-        mute.remove_css_class("image-button");
-        mute.add_css_class("mute");
-        mute.set_tooltip_text(Some("Mute in this mix"));
-        let solo = gtk::ToggleButton::with_label("S");
-        solo.add_css_class("tiny");
-        solo.set_size_request(TINY_W, TINY_H);
-        // No theme padding rules for text/icon buttons: one size for all.
-        solo.remove_css_class("text-button");
-        solo.remove_css_class("image-button");
-        solo.add_css_class("solo");
+        // Solo and mute, joined like the official mixer's S | M.
+        let ms = linked_row();
+        let solo = tiny_toggle(if strip.stereo { "SOLO" } else { "S" }, "solo");
         solo.set_tooltip_text(Some("Solo in this mix"));
-        ms.append(&mute);
+        let mute = tiny_toggle(if strip.stereo { "MUTE" } else { "M" }, "mute");
+        mute.set_tooltip_text(Some("Mute in this mix"));
         ms.append(&solo);
+        ms.append(&mute);
 
         // The level readout sits right above the fader's slot.
         db_label.set_halign(gtk::Align::Start);
-        db_label.set_width_request(DB_LABEL_W);
+        db_label.set_width_request(db_label_w());
         let f = fader.clone();
         let label = db_label.clone();
         fader.area.connect_resize(move |w, _| {
-            let margin = (f.slot_center(w as f64) - DB_LABEL_W as f64 / 2.0).max(0.0) as i32;
+            let margin = (f.slot_center(w as f64) - db_label_w() as f64 / 2.0).max(0.0) as i32;
             if label.margin_start() != margin {
                 // Defer: changing layout from inside an allocation is not allowed.
                 let label = label.clone();
@@ -955,22 +1020,21 @@ impl App {
 
         let inner = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .margin_top(6)
-            .margin_bottom(18)
-            .margin_start(4)
-            .margin_end(4)
+            .spacing(emi(0.85))
+            .margin_top(emi(0.85))
+            .margin_bottom(emi(1.25))
+            .margin_start(emi(0.6))
+            .margin_end(emi(0.6))
             .vexpand(true)
             .build();
-        inner.append(&sub);
         inner.append(&tools);
-        inner.append(&ms);
         inner.append(&pan_row);
+        inner.append(&mode);
+        inner.append(&ms);
         inner.append(&db_label);
         inner.append(&fader.area);
 
-        b.append(&name);
-        b.append(&chip);
+        b.append(&head);
         b.append(&inner);
 
         let a = self.clone();
@@ -1209,6 +1273,11 @@ impl App {
         self.syncing.set(true);
         for m in &self.ui().mix_rows {
             m.row.set_expanded(m.bus == bus);
+            if m.bus == bus {
+                m.row.add_css_class("active");
+            } else {
+                m.row.remove_css_class("active");
+            }
         }
         self.syncing.set(false);
         let w = &self.ui().window;
@@ -1226,11 +1295,11 @@ impl App {
         self.syncing.set(true);
         for s in self.strips.borrow().iter() {
             let send = st.send(s.strip.node, bus);
-            s.fader.set_accent(accent(bus));
+            s.fader.set_accent(accent(&st, bus));
             s.fader.set_value(send.fader);
             for (ch, knob, label) in &s.pans {
                 let pan = st.send(*ch, bus).pan;
-                knob.set_accent(accent(bus));
+                knob.set_accent(accent(&st, bus));
                 knob.set_value((pan + 1.0) / 2.0);
                 if !label.is_editing() {
                     label.set_text(&pan_text(pan));
@@ -1294,6 +1363,7 @@ impl App {
         drop(st);
         self.sync_mix_rows();
         self.sync_names();
+        self.sync_colors();
     }
 
     // -- daemon notices -----------------------------------------------------------
@@ -1496,6 +1566,38 @@ impl App {
         );
     }
 
+    /// Mix colors on the dots, mix knobs and strips.
+    fn sync_colors(&self) {
+        {
+            let st = self.state.borrow();
+            self.color_css.load_from_string(&mix_color_css(&st));
+            for m in &self.ui().mix_rows {
+                m.knob.set_accent(accent(&st, m.bus));
+            }
+        }
+        self.sync_strips();
+    }
+
+    /// Pick a mix's color (from its dot in the Mixes list).
+    fn mix_color_dialog(self: &Rc<Self>, bus: Bus) {
+        let (r, g, b) = hex(self.state.borrow().mix_color(bus));
+        let initial = gdk::RGBA::new(r as f32, g as f32, b as f32, 1.0);
+        let dialog = gtk::ColorDialog::builder()
+            .title(format!("{} Color", self.state.borrow().mix_name(bus)))
+            .with_alpha(false)
+            .build();
+        let a = self.clone();
+        dialog.choose_rgba(Some(&self.ui().window), Some(&initial), gio::Cancellable::NONE, move |res| {
+            // Cancelling the dialog is an error result; keep the color.
+            let Ok(c) = res else { return };
+            let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+            let rgb = byte(c.red()) << 16 | byte(c.green()) << 8 | byte(c.blue());
+            a.state.borrow_mut().set_mix_color(bus, rgb);
+            a.commit();
+            a.sync_colors();
+        });
+    }
+
     /// Mix names in the header, the accordion and the output menus.
     fn sync_names(&self) {
         let ui = self.ui();
@@ -1631,7 +1733,9 @@ fn pan_text(p: f64) -> String {
 }
 
 /// Width of a strip's level readout, centered over the fader slot.
-const DB_LABEL_W: i32 = 46;
+fn db_label_w() -> i32 {
+    emi(3.1)
+}
 
 /// A small click-to-edit value readout.
 fn value_entry(text: &str) -> gtk::EditableLabel {
@@ -1710,25 +1814,25 @@ mod tests {
     }
 }
 
-/// A chain-link glyph drawn in the widget's text color (Adwaita's
-/// `insert-link-symbolic` no longer looks like a link).
-fn link_icon() -> gtk::DrawingArea {
-    let area = gtk::DrawingArea::builder().content_width(14).content_height(14).build();
-    area.set_draw_func(|area, cr, w, h| {
-        let c = area.color();
-        cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, c.alpha() as f64);
-        cr.set_line_width(1.6);
-        cr.translate(w as f64 / 2.0, h as f64 / 2.0);
-        cr.rotate(-std::f64::consts::FRAC_PI_4);
-        // Two interlocking rounded links.
-        for dx in [-2.6, 2.6] {
-            let (x, y, lw, r) = (dx - 3.6, -2.2, 7.2, 2.2);
-            cr.new_sub_path();
-            cr.arc(x + lw - r, y + r, r, -std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
-            cr.arc(x + r, y + r, r, std::f64::consts::FRAC_PI_2, 3.0 * std::f64::consts::FRAC_PI_2);
-            cr.close_path();
-            let _ = cr.stroke();
-        }
-    });
-    area
+/// A row of joined buttons (GTK's `.linked`) sharing the strip's width.
+fn linked_row() -> gtk::Box {
+    let b = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).homogeneous(true).build();
+    b.add_css_class("linked");
+    b
+}
+
+/// Style a strip button: one fixed minimum size whatever the theme does to
+/// text or icon buttons.
+fn make_tiny(b: &gtk::Widget, class: &str) {
+    b.add_css_class("tiny");
+    b.add_css_class(class);
+    b.set_size_request(tiny_w(), tiny_h());
+    b.remove_css_class("text-button");
+    b.remove_css_class("image-button");
+}
+
+fn tiny_toggle(label: &str, class: &str) -> gtk::ToggleButton {
+    let b = gtk::ToggleButton::with_label(label);
+    make_tiny(b.upcast_ref(), class);
+    b
 }

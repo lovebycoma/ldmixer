@@ -74,6 +74,10 @@ pub struct MixerState {
     /// User names for Main, Cue A and Cue B; empty means the default.
     #[serde(default)]
     pub mix_names: [String; 3],
+    /// User colors for Main, Cue A and Cue B as `#rrggbb`; empty means the
+    /// default.
+    #[serde(default)]
+    pub mix_colors: [String; 3],
 }
 
 /// A strip as drawn in the UI: one node, or a linked pair of nodes.
@@ -113,6 +117,7 @@ impl MixerState {
             masters: [1.0; 3],
             routes: profile.outputs.iter().map(|o| o.default).collect(),
             mix_names: Default::default(),
+            mix_colors: Default::default(),
         }
         .with_pair_pans()
     }
@@ -134,6 +139,18 @@ impl MixerState {
     pub fn mix_name(&self, bus: Bus) -> String {
         let n = self.mix_names[bus.index()].trim();
         if n.is_empty() { default_mix_name(bus).to_string() } else { n.to_string() }
+    }
+
+    /// Display color of a mix as `0xrrggbb`: the user's color or the default.
+    pub fn mix_color(&self, bus: Bus) -> u32 {
+        parse_color(&self.mix_colors[bus.index()]).unwrap_or_else(|| default_mix_color(bus))
+    }
+
+    /// Set a mix's color; the default color is stored as empty.
+    pub fn set_mix_color(&mut self, bus: Bus, rgb: u32) {
+        let rgb = rgb & 0xff_ffff;
+        self.mix_colors[bus.index()] =
+            if rgb == default_mix_color(bus) { String::new() } else { format!("#{rgb:06x}") };
     }
 
     /// Label of a routing source, using the mixes' names.
@@ -405,6 +422,25 @@ fn send_from_cells(l: Option<f32>, r: Option<f32>) -> Send {
     }
 }
 
+/// Factory color of a mix, `0xrrggbb`.
+pub fn default_mix_color(bus: Bus) -> u32 {
+    match bus {
+        Bus::Main => 0x2dd4bf,
+        Bus::CueA => 0xf59e0b,
+        Bus::CueB => 0xa78bfa,
+    }
+}
+
+/// Parse `#rrggbb` (the `#` is optional).
+fn parse_color(s: &str) -> Option<u32> {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        u32::from_str_radix(h, 16).ok()
+    } else {
+        None
+    }
+}
+
 pub fn default_mix_name(bus: Bus) -> &'static str {
     match bus {
         Bus::Main => "Main Mix",
@@ -538,6 +574,19 @@ mod tests {
         let before = s.visible_strips().len();
         s.channels[2].hidden = true; // Digi 1+2
         assert_eq!(s.visible_strips().len(), before - 1);
+    }
+
+    #[test]
+    fn mix_colors() {
+        let mut s = MixerState::default_for(id24());
+        assert_eq!(s.mix_color(Bus::Main), default_mix_color(Bus::Main));
+        s.set_mix_color(Bus::CueA, 0x112233);
+        assert_eq!(s.mix_colors[1], "#112233");
+        assert_eq!(s.mix_color(Bus::CueA), 0x112233);
+        s.set_mix_color(Bus::CueA, default_mix_color(Bus::CueA));
+        assert_eq!(s.mix_colors[1], "");
+        s.mix_colors[2] = "not a color".into();
+        assert_eq!(s.mix_color(Bus::CueB), default_mix_color(Bus::CueB));
     }
 
     #[test]
