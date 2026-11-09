@@ -1,8 +1,8 @@
 {
   # lD Mixer for Nix and NixOS.
   #
-  #   nix run github:lovebycoma/ld-mixer            # try it
-  #   nix profile install github:lovebycoma/ld-mixer
+  #   nix run github:lovebycoma/ldmixer            # try it
+  #   nix profile install github:lovebycoma/ldmixer
   #   ld-mixer uninstall                            # remove it again
   #
   # On NixOS, USB access needs the udev rule from the package; add the module:
@@ -40,7 +40,7 @@
           '';
           meta = with pkgs.lib; {
             description = "Unofficial mixer and monitor control for Audient iD interfaces";
-            homepage = "https://github.com/lovebycoma/ld-mixer";
+            homepage = "https://github.com/lovebycoma/ldmixer";
             license = licenses.mit;
             platforms = platforms.linux;
             mainProgram = "ld-mixer";

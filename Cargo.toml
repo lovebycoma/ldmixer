@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Unofficial mixer and monitor control for Audient iD interfaces (lD = Linux iD)"
 license = "MIT"
-repository = "https://github.com/lovebycoma/ld-mixer"
+repository = "https://github.com/lovebycoma/ldmixer"
 
 [dependencies]
 adw = { version = "0.9.2", package = "libadwaita", features = ["v1_7"] }

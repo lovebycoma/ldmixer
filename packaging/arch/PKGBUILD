@@ -5,14 +5,14 @@
 #
 # By default the package is built from the git checkout this PKGBUILD lives
 # in (committed changes only). Set LDMIXER_SOURCE to build from elsewhere,
-# e.g. LDMIXER_SOURCE=https://github.com/lovebycoma/ld-mixer.git makepkg -si
+# e.g. LDMIXER_SOURCE=https://github.com/lovebycoma/ldmixer.git makepkg -si
 
 pkgname=ld-mixer
-pkgver=0.1.0.r11.ge377ded
+pkgver=0.1.0.r12.gc484718
 pkgrel=1
 pkgdesc="Unofficial mixer and monitor control for Audient iD interfaces (lD = Linux iD)"
 arch=('x86_64' 'aarch64')
-url="https://github.com/lovebycoma/ld-mixer"
+url="https://github.com/lovebycoma/ldmixer"
 license=('MIT')
 depends=('gtk4' 'libadwaita' 'libusb' 'glib2' 'cairo' 'pango' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
 optdepends=('pipewire: per-channel virtual inputs/outputs and the loopback input (pw-loopback, pw-dump)')

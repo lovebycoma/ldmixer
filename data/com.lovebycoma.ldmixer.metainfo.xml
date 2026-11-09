@@ -13,7 +13,7 @@
     </p>
   </description>
   <launchable type="desktop-id">com.lovebycoma.ldmixer.desktop</launchable>
-  <url type="homepage">https://github.com/lovebycoma/ld-mixer</url>
+  <url type="homepage">https://github.com/lovebycoma/ldmixer</url>
   <provides>
     <modalias>usb:v2708p000Dd*</modalias>
   </provides>

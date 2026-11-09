@@ -11,7 +11,7 @@ Version:        0.1.0
 Release:        1%{?dist}
 Summary:        Unofficial mixer and monitor control for Audient iD interfaces
 License:        MIT
-URL:            https://github.com/lovebycoma/ld-mixer
+URL:            https://github.com/lovebycoma/ldmixer
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  cargo

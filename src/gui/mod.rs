@@ -1561,7 +1561,7 @@ impl App {
             .application_icon(APP_ID)
             .version(env!("CARGO_PKG_VERSION"))
             .developer_name("lovebycoma")
-            .website("https://github.com/lovebycoma/ld-mixer")
+            .website("https://github.com/lovebycoma/ldmixer")
             .license_type(gtk::License::MitX11)
             .comments(
                 "Unofficial mixer for Audient iD interfaces. lD = Linux iD.\n\
