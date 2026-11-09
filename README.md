@@ -15,21 +15,45 @@ modeled on Audient's own iD Mixer app. The name is a pun:
 - A background service with a tray icon, so the mix keeps working after you
   close the window.
 
-> **Status:** unofficial and not affiliated with Audient. Tested on an
-> **iD24**. Other iD models are recognized but not controlled yet.
+## About this project
+
+**Purpose.** lD Mixer is meant to replace Audient's iD Mixer on Linux, and
+it is designed for the Audient iD family in general. Each model gets a
+profile; models that have not been verified on real hardware are recognized
+but not controlled, so nothing is sent to them blindly.
+
+**Tested on** (everything else is untested):
+
+| | |
+|---|---|
+| Interface | Audient **iD24**, firmware 1.12 |
+| Distribution | Artix Linux, kernel 7.3.1 (CachyOS) |
+| Audio | PipeWire 1.6.11, WirePlumber 0.5.18, EasyEffects 8.3 |
+| Desktop | niri (Wayland), quickshell tray, adw-gtk3 theme |
+| Toolkit | GTK 4.24, libadwaita 1.10, Rust 1.99 |
+
+> [!WARNING]
+> **Made with AI, not reviewed by a person.** lD Mixer was built with the
+> help of AI (roughly 90% "vibe coding") and has **not had a proper human
+> code review**. It talks to your audio interface with unofficial,
+> reverse-engineered commands. **You use it at your own risk**: the author
+> takes no responsibility for problems it causes, including to your
+> hardware, your hearing or your speakers. Keep monitor levels low when
+> trying something new. This project is not affiliated with Audient.
 
 ---
 
 ## Contents
 
-1. [Requirements](#requirements)
-2. [Install](#install)
-3. [First start](#first-start)
-4. [What lD Mixer changes on your system](#what-ldmixer-changes-on-your-system)
-5. [Uninstall](#uninstall)
-6. [Using lD Mixer](#using-ldmixer)
-7. [Troubleshooting](#troubleshooting)
-8. [For developers](#for-developers)
+1. [About this project](#about-this-project)
+2. [Requirements](#requirements)
+3. [Install](#install)
+4. [First start](#first-start)
+5. [What lD Mixer changes on your system](#what-ld-mixer-changes-on-your-system)
+6. [Uninstall](#uninstall)
+7. [Using lD Mixer](#using-ld-mixer)
+8. [Troubleshooting](#troubleshooting)
+9. [For developers](#for-developers)
 
 ---
 
@@ -52,7 +76,7 @@ old.
 ## Install
 
 Every method installs the **same files** (listed in
-[What lD Mixer changes](#what-ldmixer-changes-on-your-system)) and can be
+[What lD Mixer changes](#what-ld-mixer-changes-on-your-system)) and can be
 removed with one command (see [Uninstall](#uninstall)).
 
 ### 1. Get the source

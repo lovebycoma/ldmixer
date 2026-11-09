@@ -6,6 +6,17 @@ this before changing code. User-facing documentation is in `README.md`
 (English) and `README.ko.md` (Korean); the USB protocol is in
 `docs/PROTOCOL.md`.
 
+## What the project is for
+
+lD Mixer replaces Audient's iD Mixer on Linux and targets the iD family in
+general (profiles per model; unverified models are recognized, not driven).
+Tested only on the owner's iD24 (firmware 1.12) with Artix Linux, kernel
+7.3.1 (CachyOS), PipeWire 1.6.11, WirePlumber 0.5.18, EasyEffects 8.3, niri
+(Wayland) with a quickshell tray and the adw-gtk3 theme. The project is
+largely AI-written ("~90% vibe coding") without a proper human review, and
+the READMEs say so together with a use-at-your-own-risk notice; keep that
+notice, and update the tested-environment table when it changes.
+
 ## Project rules (from the owner; do not break)
 
 1. **Never change the owner's real system.** Do not install packages, edit
