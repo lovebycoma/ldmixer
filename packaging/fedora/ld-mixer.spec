@@ -2,6 +2,8 @@
 # which creates the source tarball (with vendored crates, so the build runs
 # offline) and calls rpmbuild. Remove with: ld-mixer-uninstall (or dnf remove ld-mixer)
 
+%{!?_udevrulesdir:%global _udevrulesdir /usr/lib/udev/rules.d}
+
 Name:           ld-mixer
 Version:        0.1.0
 Release:        1%{?dist}
