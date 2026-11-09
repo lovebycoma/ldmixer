@@ -55,6 +55,13 @@ pub struct SystemState {
     /// 0 = ADAT, 1 = S/PDIF.
     pub optical_in: Option<i32>,
     pub optical_out: Option<i32>,
+    /// PipeWire's graph quantum (buffer size in samples), read from its
+    /// `settings` metadata; lD Mixer never changes it.
+    #[serde(default)]
+    pub quantum: Option<u32>,
+    /// True when the quantum is pinned by `clock.force-quantum`.
+    #[serde(default)]
+    pub quantum_forced: bool,
 }
 
 pub enum Command {
@@ -395,7 +402,11 @@ impl Engine {
             streaming,
             optical_in: dev.optical_mode(false).ok(),
             optical_out: dev.optical_mode(true).ok(),
+            quantum: None,
+            quantum_forced: false,
         };
+        let mut state = state;
+        (state.quantum, state.quantum_forced) = pipewire_quantum();
         if self.system.as_ref() != Some(&state) {
             self.system = Some(state.clone());
             self.emit(Event::System(state));
@@ -459,4 +470,28 @@ fn proc_stream_rate(mock: bool) -> (Option<u32>, bool) {
         .and_then(|v| v.split_whitespace().next())
         .and_then(|v| v.parse().ok());
     (if running { rate } else { None }, running)
+}
+
+/// The graph quantum from `pw-metadata -n settings`: the forced value when
+/// `clock.force-quantum` is set, otherwise the default `clock.quantum`.
+fn pipewire_quantum() -> (Option<u32>, bool) {
+    let Ok(out) = std::process::Command::new("pw-metadata")
+        .args(["-n", "settings"])
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return (None, false);
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let value = |key: &str| -> Option<u32> {
+        text.lines()
+            .find(|l| l.contains(&format!("key:'{key}'")))
+            .and_then(|l| l.split("value:'").nth(1))
+            .and_then(|v| v.split('\'').next())
+            .and_then(|v| v.parse().ok())
+    };
+    match value("clock.force-quantum") {
+        Some(q) if q > 0 => (Some(q), true),
+        _ => (value("clock.quantum"), false),
+    }
 }

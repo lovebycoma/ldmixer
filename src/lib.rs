@@ -4,6 +4,9 @@
 //! transport (and a mock device), the mixer state model, persistence and the
 //! background device engine.
 
+/// Application ID: GTK application, desktop file, icon and tray name.
+pub const APP_ID: &str = "com.lovebycoma.ldmixer";
+
 pub mod config;
 pub mod device;
 pub mod engine;

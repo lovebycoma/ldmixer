@@ -29,7 +29,7 @@ use ld_mixer::protocol::{self, monitor, Bus, NodeKind, Profile, RouteSource};
 
 use widgets::{hex, Fader, Knob, Rgb};
 
-pub const APP_ID: &str = "io.github.lovebycoma.LdMixer";
+pub use ld_mixer::APP_ID;
 
 fn accent(bus: Bus) -> Rgb {
     match bus {
@@ -53,7 +53,7 @@ fn bus_from_name(name: &str) -> Option<Bus> {
 
 const CSS: &str = r#"
 .mixer-body { background-color: #12151b; }
-.strips { border: 1px solid #2a303b; border-right: none; }
+.strips { }
 .strip {
   background-color: #1a1e26;
   border-right: 1px solid #2a303b;
@@ -67,7 +67,7 @@ const CSS: &str = r#"
 .kind-mic .chip { background-color: #f87171; }
 .kind-digital .chip { background-color: #60a5fa; }
 .kind-daw .chip { background-color: #34d399; }
-button.tiny { min-height: 22px; min-width: 20px; padding: 0 2px; font-size: 0.75em; font-weight: 700; }
+button.tiny { min-height: 22px; min-width: 26px; padding: 0; font-size: 0.75em; font-weight: 700; }
 .mix-dot { min-width: 10px; min-height: 10px; border-radius: 5px; }
 .mix-dot.main { background-color: #2dd4bf; }
 .mix-dot.cuea { background-color: #f59e0b; }
@@ -135,8 +135,8 @@ pub fn run(mock: bool) -> glib::ExitCode {
 struct StripUi {
     strip: Strip,
     fader: Fader,
-    pan: Knob,
-    pan_label: gtk::EditableLabel,
+    /// One pan per channel: `(node, knob, readout)`.
+    pans: Vec<(usize, Knob, gtk::EditableLabel)>,
     db_label: gtk::EditableLabel,
     mute: gtk::ToggleButton,
     solo: gtk::ToggleButton,
@@ -161,6 +161,7 @@ struct Ui {
     banner: adw::Banner,
     toasts: adw::ToastOverlay,
     mixes: adw::ToggleGroup,
+    mix_toggles: Vec<adw::Toggle>,
     menu_button: gtk::MenuButton,
     strips_box: gtk::Box,
     mix_rows: Vec<MixRow>,
@@ -173,6 +174,7 @@ struct Ui {
     routes: Vec<adw::ComboRow>,
     loopback_switch: adw::SwitchRow,
     rate_row: adw::ActionRow,
+    quantum_row: adw::ActionRow,
     device_row: adw::ActionRow,
     optical_in: adw::ComboRow,
     optical_out: adw::ComboRow,
@@ -325,14 +327,15 @@ impl App {
         header.set_title_widget(Some(&title));
 
         let mixes = adw::ToggleGroup::new();
+        let mut mix_toggles = Vec::new();
         for bus in Bus::ALL {
-            mixes.add(
-                adw::Toggle::builder()
-                    .label(bus.label().to_uppercase())
-                    .name(bus_name(bus))
-                    .tooltip(format!("Show the {} mix", bus.label()))
-                    .build(),
-            );
+            let t = adw::Toggle::builder()
+                .label(bus.label().to_uppercase())
+                .name(bus_name(bus))
+                .tooltip(format!("Show the {} mix", bus.label()))
+                .build();
+            mixes.add(t.clone());
+            mix_toggles.push(t);
         }
         mixes.set_active_name(Some("main"));
         let a = self.clone();
@@ -360,10 +363,6 @@ impl App {
             .orientation(gtk::Orientation::Horizontal)
             .spacing(0)
             .halign(gtk::Align::Start)
-            .margin_start(10)
-            .margin_end(10)
-            .margin_top(10)
-            .margin_bottom(10)
             .build();
         strips_box.add_css_class("strips");
         let scroller = gtk::ScrolledWindow::builder()
@@ -373,7 +372,7 @@ impl App {
             .child(&strips_box)
             .build();
 
-        // Left column: the three mixes as an accordion. Opening one makes it
+        // Mixes column (beside the monitor column): the three mixes as an accordion. Opening one makes it
         // the mix the strips show; its master is a knob.
         let mix_group = adw::PreferencesGroup::builder()
             .title("Mixes")
@@ -389,6 +388,15 @@ impl App {
             dot.add_css_class("mix-dot");
             dot.add_css_class(bus_name(bus));
             row.add_prefix(&dot);
+            let rename = gtk::Button::builder()
+                .icon_name("document-edit-symbolic")
+                .tooltip_text("Rename this mix")
+                .valign(gtk::Align::Center)
+                .build();
+            rename.add_css_class("flat");
+            let a = self.clone();
+            rename.connect_clicked(move |_| a.rename_mix_dialog(bus));
+            row.add_suffix(&rename);
 
             let content = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
@@ -651,6 +659,11 @@ impl App {
         }
         sys_group.add(&device_row);
         sys_group.add(&rate_row);
+        let quantum_row = adw::ActionRow::builder().title("Quantum").subtitle("–").build();
+        quantum_row.set_tooltip_text(Some(
+            "PipeWire's buffer size, set by the sound server; lD Mixer does not change it",
+        ));
+        sys_group.add(&quantum_row);
         sys_group.add(&optical_in);
         sys_group.add(&optical_out);
 
@@ -673,9 +686,9 @@ impl App {
         panel_scroll.add_css_class("side-panel");
 
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        body.append(&left_scroll);
-        body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(&mixer_area);
+        body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        body.append(&left_scroll);
         body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(&panel_scroll);
 
@@ -697,6 +710,7 @@ impl App {
             banner,
             toasts,
             mixes,
+            mix_toggles,
             menu_button,
             strips_box,
             mix_rows,
@@ -709,6 +723,7 @@ impl App {
             routes,
             loopback_switch,
             rate_row,
+            quantum_row,
             device_row,
             optical_in,
             optical_out,
@@ -720,7 +735,7 @@ impl App {
         while let Some(child) = ui.strips_box.first_child() {
             ui.strips_box.remove(&child);
         }
-        let strips = self.state.borrow().strips();
+        let strips = self.state.borrow().visible_strips();
         let mut built = Vec::new();
         for strip in strips {
             let (widget, s) = self.build_strip(strip);
@@ -784,7 +799,7 @@ impl App {
         // Phase and link buttons.
         let tools = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(2)
+            .spacing(4)
             .halign(gtk::Align::Center)
             .build();
         let phase_inputs = self.profile.phase_inputs as usize;
@@ -847,10 +862,44 @@ impl App {
         });
         tools.append(&vdev_btn);
 
-        let pan = Knob::new(40, true, 0.5, accent(bus));
-        pan.area.set_tooltip_text(Some(if strip.stereo { "Balance" } else { "Pan" }));
-        let pan_label = value_entry("C");
-        pan_label.set_tooltip_text(Some("Click to type: C, L50, R30 or -100..100"));
+        // One pan per channel; a linked pair shows its left and right side by side.
+        let pan_row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .homogeneous(true)
+            .build();
+        let mut pans = Vec::new();
+        let channels = if strip.stereo { 2 } else { 1 };
+        for (k, ch) in (node..node + channels).enumerate() {
+            let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            let knob = Knob::new(38, true, if strip.stereo { k as f64 } else { 0.5 }, accent(bus));
+            knob.area.set_tooltip_text(Some(match (strip.stereo, k) {
+                (false, _) => "Pan",
+                (true, 0) => "Pan of the left channel",
+                _ => "Pan of the right channel",
+            }));
+            let label = value_entry("C");
+            label.set_tooltip_text(Some("Click to type: C, L50, R30 or -100..100"));
+            col.append(&knob.area);
+            col.append(&label);
+            pan_row.append(&col);
+            let a = self.clone();
+            let l = label.clone();
+            knob.connect_changed(move |v| {
+                let p = v * 2.0 - 1.0;
+                l.set_text(&pan_text(p));
+                a.update_send(ch, |s| s.pan = p);
+            });
+            let a = self.clone();
+            let kn = knob.clone();
+            on_value_edited(&label, move |l, text| {
+                if let Some(p) = parse_pan(text) {
+                    kn.set_value((p + 1.0) / 2.0);
+                    a.update_send(ch, |s| s.pan = p);
+                }
+                l.set_text(&pan_text(kn.value() * 2.0 - 1.0));
+            });
+            pans.push((ch, knob, label));
+        }
         let fader = Fader::new(if strip.stereo { 2 } else { 1 }, accent(bus));
         let db_label = value_entry("-inf");
         db_label.set_tooltip_text(Some("Click to type a level in dB (e.g. -12, -inf)"));
@@ -896,8 +945,7 @@ impl App {
             .build();
         inner.append(&sub);
         inner.append(&tools);
-        inner.append(&pan.area);
-        inner.append(&pan_label);
+        inner.append(&pan_row);
         inner.append(&ms);
         inner.append(&db_label);
         inner.append(&fader.area);
@@ -912,14 +960,7 @@ impl App {
             label.set_text(&protocol::format_db(protocol::fader_to_db(v)));
             a.update_send(node, |s| s.fader = v);
         });
-        let a = self.clone();
-        let label = pan_label.clone();
-        pan.connect_changed(move |v| {
-            let p = v * 2.0 - 1.0;
-            label.set_text(&pan_text(p));
-            a.update_send(node, |s| s.pan = p);
-        });
-        // Typed values.
+        // Typed level.
         let a = self.clone();
         let f = fader.clone();
         on_value_edited(&db_label, move |l, text| {
@@ -929,15 +970,6 @@ impl App {
                 a.update_send(node, |s| s.fader = v);
             }
             l.set_text(&protocol::format_db(protocol::fader_to_db(f.value())));
-        });
-        let a = self.clone();
-        let k = pan.clone();
-        on_value_edited(&pan_label, move |l, text| {
-            if let Some(p) = parse_pan(text) {
-                k.set_value((p + 1.0) / 2.0);
-                a.update_send(node, |s| s.pan = p);
-            }
-            l.set_text(&pan_text(k.value() * 2.0 - 1.0));
         });
         let a = self.clone();
         mute.connect_toggled(move |m| {
@@ -950,7 +982,26 @@ impl App {
             a.update_send(node, |s| s.solo = on);
         });
 
-        (b, StripUi { strip, fader, pan, pan_label, db_label, mute, solo })
+        // Right click: rename or hide this line.
+        let menu = gio::Menu::new();
+        let item = gio::MenuItem::new(Some("Rename…"), None);
+        item.set_action_and_target_value(Some("app.rename-strip"), Some(&(node as i32).to_variant()));
+        menu.append_item(&item);
+        let item = gio::MenuItem::new(Some("Hide"), None);
+        item.set_action_and_target_value(Some("app.hide-strip"), Some(&(node as i32).to_variant()));
+        menu.append_item(&item);
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_parent(&b);
+        popover.set_has_arrow(false);
+        let right = gtk::GestureClick::builder().button(3).build();
+        let pop = popover.clone();
+        right.connect_pressed(move |_, _, x, y| {
+            pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            pop.popup();
+        });
+        b.add_controller(right);
+
+        (b, StripUi { strip, fader, pans, db_label, mute, solo })
     }
 
     fn install_actions(self: &Rc<Self>) {
@@ -975,6 +1026,7 @@ impl App {
                     *a.state.borrow_mut() = st;
                     a.rebuild_strips();
                     a.sync_panel();
+                    a.rebuild_menu();
                     a.commit();
                     a.toast(&format!("Recalled preset “{name}”"));
                 }
@@ -1010,6 +1062,34 @@ impl App {
             }
         }));
 
+        // Per-line actions (target: the strip's first node).
+        let add_int = |name: &str, f: Box<dyn Fn(usize)>| {
+            let action = gio::SimpleAction::new(name, Some(glib::VariantTy::INT32));
+            action.connect_activate(move |_, p| {
+                if let Some(n) = p.and_then(|v| v.get::<i32>()) {
+                    f(n.max(0) as usize);
+                }
+            });
+            self.gapp.add_action(&action);
+        };
+        let a = self.clone();
+        add_int("rename-strip", Box::new(move |n| a.rename_dialog(n)));
+        let a = self.clone();
+        add_int("hide-strip", Box::new(move |n| a.set_hidden(n, true)));
+        let a = self.clone();
+        add_int("show-strip", Box::new(move |n| a.set_hidden(n, false)));
+        let a = self.clone();
+        add("show-all-strips", None, Box::new(move |_| {
+            let hidden: Vec<usize> = {
+                let st = a.state.borrow();
+                (0..st.channels.len()).filter(|&i| st.channels[i].hidden).collect()
+            };
+            for n in hidden {
+                a.state.borrow_mut().channels[n].hidden = false;
+            }
+            a.after_layout_change();
+        }));
+
         self.gapp.set_accels_for_action("app.mix::main", &["<Ctrl>1"]);
         self.gapp.set_accels_for_action("app.mix::cuea", &["<Ctrl>2"]);
         self.gapp.set_accels_for_action("app.mix::cueb", &["<Ctrl>3"]);
@@ -1036,6 +1116,27 @@ impl App {
             presets.append_submenu(Some("Delete Preset"), &delete);
         }
         menu.append_section(None, &presets);
+        // Hidden lines, to bring them back.
+        let hidden: Vec<(usize, String)> = {
+            let st = self.state.borrow();
+            st.strips()
+                .into_iter()
+                .filter(|s| st.channels[s.node].hidden)
+                .map(|s| (s.node, st.strip_name(self.profile, s)))
+                .collect()
+        };
+        if !hidden.is_empty() {
+            let lines = gio::Menu::new();
+            let sub = gio::Menu::new();
+            for (node, name) in &hidden {
+                let item = gio::MenuItem::new(Some(name), None);
+                item.set_action_and_target_value(Some("app.show-strip"), Some(&(*node as i32).to_variant()));
+                sub.append_item(&item);
+            }
+            sub.append(Some("Show All"), Some("app.show-all-strips"));
+            lines.append_submenu(Some(&format!("Hidden Channels ({})", hidden.len())), &sub);
+            menu.append_section(None, &lines);
+        }
         let device = gio::Menu::new();
         device.append(Some("Load Mix from Device"), Some("app.readback"));
         device.append(Some("Reset Mixer…"), Some("app.reset"));
@@ -1091,11 +1192,14 @@ impl App {
         for s in self.strips.borrow().iter() {
             let send = st.send(s.strip.node, bus);
             s.fader.set_accent(accent(bus));
-            s.pan.set_accent(accent(bus));
             s.fader.set_value(send.fader);
-            s.pan.set_value((send.pan + 1.0) / 2.0);
-            if !s.pan_label.is_editing() {
-                s.pan_label.set_text(&pan_text(send.pan));
+            for (ch, knob, label) in &s.pans {
+                let pan = st.send(*ch, bus).pan;
+                knob.set_accent(accent(bus));
+                knob.set_value((pan + 1.0) / 2.0);
+                if !label.is_editing() {
+                    label.set_text(&pan_text(pan));
+                }
             }
             if !s.db_label.is_editing() {
                 s.db_label.set_text(&protocol::format_db(protocol::fader_to_db(send.fader)));
@@ -1154,6 +1258,7 @@ impl App {
         self.syncing.set(false);
         drop(st);
         self.sync_mix_rows();
+        self.sync_names();
     }
 
     // -- daemon notices -----------------------------------------------------------
@@ -1192,6 +1297,7 @@ impl App {
                 *self.state.borrow_mut() = *st;
                 self.rebuild_strips();
                 self.sync_panel();
+                self.rebuild_menu();
             }
             Notice::Settings(st) => {
                 self.syncing.set(true);
@@ -1266,6 +1372,17 @@ impl App {
     fn on_system(&self, s: &SystemState) {
         let ui = self.ui();
         self.syncing.set(true);
+        ui.quantum_row.set_subtitle(&match s.quantum {
+            Some(q) => {
+                let rate = s.sample_rate.unwrap_or(48000).max(1) as f64;
+                format!(
+                    "{q} samples · {:.1} ms{}",
+                    q as f64 * 1000.0 / rate,
+                    if s.quantum_forced { " (forced)" } else { " (default; apps may change it)" }
+                )
+            }
+            None => "Unknown".into(),
+        });
         ui.rate_row.set_subtitle(&match s.sample_rate {
             Some(r) => format!("{:.1} kHz{}", r as f64 / 1000.0, if s.streaming { "" } else { " (idle)" }),
             None => "No stream running".into(),
@@ -1307,6 +1424,67 @@ impl App {
         dialog.present(Some(&self.ui().window));
     }
 
+    /// Hide or show a line (strip), then refresh the window and menu.
+    fn set_hidden(self: &Rc<Self>, node: usize, hidden: bool) {
+        if let Some(ch) = self.state.borrow_mut().channels.get_mut(node) {
+            ch.hidden = hidden;
+        }
+        self.after_layout_change();
+        if hidden {
+            self.toast("Channel hidden; show it again from the main menu");
+        }
+    }
+
+    fn after_layout_change(self: &Rc<Self>) {
+        self.commit();
+        let a = self.clone();
+        // Rebuild outside the handler that triggered this (it may be a
+        // widget of the strip being removed).
+        glib::idle_add_local_once(move || {
+            a.rebuild_strips();
+            a.rebuild_menu();
+        });
+    }
+
+    fn rename_mix_dialog(self: &Rc<Self>, bus: Bus) {
+        let current = self.state.borrow().mix_names[bus.index()].clone();
+        self.text_dialog(
+            "Rename Mix",
+            &format!("New name for {}. Leave empty to restore the default.", ld_mixer::mixer::default_mix_name(bus)),
+            &current,
+            "Rename",
+            move |a, text| {
+                a.state.borrow_mut().mix_names[bus.index()] = text.trim().to_string();
+                a.commit();
+                a.sync_names();
+            },
+        );
+    }
+
+    /// Mix names in the header, the accordion and the output menus.
+    fn sync_names(&self) {
+        let ui = self.ui();
+        let st = self.state.borrow();
+        for (t, bus) in ui.mix_toggles.iter().zip(Bus::ALL) {
+            let name = st.mix_name(bus);
+            t.set_label(Some(&name.to_uppercase()));
+            t.set_tooltip(&format!("Show {name}"));
+        }
+        for m in &ui.mix_rows {
+            m.row.set_title(&st.mix_name(m.bus));
+        }
+        self.syncing.set(true);
+        for ((row, pair), src) in ui.routes.iter().zip(self.profile.outputs).zip(&st.routes) {
+            let labels: Vec<String> = pair.sources.iter().map(|s| st.source_label(*s)).collect();
+            let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+            row.set_model(Some(&gtk::StringList::new(&labels)));
+            if let Some(i) = pair.sources.iter().position(|s| s == src) {
+                row.set_selected(i as u32);
+            }
+        }
+        self.syncing.set(false);
+    }
+
     fn rename_dialog(self: &Rc<Self>, node: usize) {
         let current = self.state.borrow().channels[node].label.clone();
         self.text_dialog(
@@ -1316,8 +1494,7 @@ impl App {
             "Rename",
             move |a, text| {
                 a.state.borrow_mut().channels[node].label = text.trim().to_string();
-                a.commit();
-                a.rebuild_strips();
+                a.after_layout_change();
             },
         );
     }

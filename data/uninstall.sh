@@ -42,6 +42,7 @@ else
 fi
 
 user_paths="$config_home/ld-mixer $state_home/ld-mixer $cache_home/ld-mixer \
+$config_home/autostart/com.lovebycoma.ldmixer.desktop \
 $config_home/autostart/io.github.lovebycoma.LdMixer.desktop"
 
 self=$(readlink -f "${LDMIXER_SELF:-$0}")

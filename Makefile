@@ -22,7 +22,7 @@ UDEVDIR  ?= /etc/udev/rules.d
 endif
 CARGO    ?= cargo
 TARGET   ?= target/release
-APPID    := io.github.lovebycoma.LdMixer
+APPID    := com.lovebycoma.ldmixer
 
 FILES := \
 	$(BINDIR)/ld-mixer \

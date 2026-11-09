@@ -54,7 +54,7 @@ impl Tray for LdTray {
     }
 
     fn icon_name(&self) -> String {
-        "io.github.lovebycoma.LdMixer".into()
+        crate::APP_ID.into()
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
@@ -77,7 +77,7 @@ impl Tray for LdTray {
         vec![
             StandardItem {
                 label: "Open lD Mixer".into(),
-                icon_name: "io.github.lovebycoma.LdMixer".into(),
+                icon_name: crate::APP_ID.into(),
                 activate: Box::new(|t: &mut Self| t.send(Action::OpenGui)),
                 ..Default::default()
             }

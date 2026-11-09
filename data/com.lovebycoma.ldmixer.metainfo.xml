@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.lovebycoma.LdMixer</id>
+  <id>com.lovebycoma.ldmixer</id>
   <name>lD Mixer</name>
   <summary>Mixer and monitor control for Audient iD interfaces</summary>
   <metadata_license>CC0-1.0</metadata_license>
@@ -12,7 +12,7 @@
       Audio keeps playing while it is connected, and no kernel module is needed.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.lovebycoma.LdMixer.desktop</launchable>
+  <launchable type="desktop-id">com.lovebycoma.ldmixer.desktop</launchable>
   <url type="homepage">https://github.com/lovebycoma/ld-mixer</url>
   <provides>
     <modalias>usb:v2708p000Dd*</modalias>

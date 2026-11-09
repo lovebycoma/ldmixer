@@ -17,7 +17,9 @@ use crate::protocol::{
 pub struct Send {
     /// Fader position, 0..=1 (see [`protocol::fader_to_db`]).
     pub fader: f64,
-    /// Pan (mono) or balance (stereo pair), -1 = left .. +1 = right.
+    /// Pan, -1 = left .. +1 = right. In a linked pair each channel keeps
+    /// its own pan (L100 / R100 by default); fader, mute and solo come from
+    /// the pair's first channel.
     pub pan: f64,
     pub mute: bool,
     pub solo: bool,
@@ -47,17 +49,31 @@ pub struct Channel {
     /// first node's flag counts.
     #[serde(default)]
     pub virtual_device: bool,
+    /// Hidden from the mixer window (audio is unaffected). On a linked pair
+    /// the first channel's flag counts.
+    #[serde(default)]
+    pub hidden: bool,
 }
+
+/// Current layout of [`MixerState`] files. Version 2: each channel of a
+/// linked pair has its own pan (version 1 stored one balance on the pair).
+pub const STATE_VERSION: u32 = 2;
 
 /// Persistent mixer state for one device model.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MixerState {
+    /// File format version; missing in version 1 files.
+    #[serde(default)]
+    pub version: u32,
     pub model: String,
     pub channels: Vec<Channel>,
     /// Master fader position of each mix.
     pub masters: [f64; 3],
     /// Routing source per output pair, in profile order.
     pub routes: Vec<RouteSource>,
+    /// User names for Main, Cue A and Cue B; empty means the default.
+    #[serde(default)]
+    pub mix_names: [String; 3],
 }
 
 /// A strip as drawn in the UI: one node, or a linked pair of nodes.
@@ -82,6 +98,7 @@ impl MixerState {
                 linked: node.default_linked,
                 phase: false,
                 virtual_device: false,
+                hidden: false,
                 sends: if node.kind == NodeKind::Daw && i == first_daw(profile) {
                     [Send::UNITY; 3]
                 } else {
@@ -90,15 +107,58 @@ impl MixerState {
             })
             .collect();
         MixerState {
+            version: STATE_VERSION,
             model: profile.name.to_string(),
             channels,
             masters: [1.0; 3],
             routes: profile.outputs.iter().map(|o| o.default).collect(),
+            mix_names: Default::default(),
         }
+        .with_pair_pans()
+    }
+
+    /// Give every linked pair its stereo spread (L100 / R100).
+    fn with_pair_pans(mut self) -> MixerState {
+        for i in (0..self.channels.len().saturating_sub(1)).step_by(2) {
+            if self.channels[i].linked {
+                for b in 0..3 {
+                    self.channels[i].sends[b].pan = -1.0;
+                    self.channels[i + 1].sends[b].pan = 1.0;
+                }
+            }
+        }
+        self
+    }
+
+    /// Display name of a mix: the user's name or the default.
+    pub fn mix_name(&self, bus: Bus) -> String {
+        let n = self.mix_names[bus.index()].trim();
+        if n.is_empty() { default_mix_name(bus).to_string() } else { n.to_string() }
+    }
+
+    /// Label of a routing source, using the mixes' names.
+    pub fn source_label(&self, src: RouteSource) -> String {
+        match src {
+            RouteSource::Main => self.mix_name(Bus::Main),
+            RouteSource::CueA => self.mix_name(Bus::CueA),
+            RouteSource::CueB => self.mix_name(Bus::CueB),
+            other => other.label(),
+        }
+    }
+
+    /// Strips shown in the window (not hidden).
+    pub fn visible_strips(&self) -> Vec<Strip> {
+        self.strips().into_iter().filter(|s| !self.channels[s.node].hidden).collect()
     }
 
     /// Make a loaded state fit the profile (node or output count changes).
     pub fn sanitize(mut self, profile: &Profile) -> MixerState {
+        if self.version < 2 {
+            // Version 1 kept a single balance per linked pair; give each
+            // channel its own side instead so pairs stay stereo.
+            self = self.with_pair_pans();
+            self.version = STATE_VERSION;
+        }
         let fresh = MixerState::default_for(profile);
         self.channels.truncate(profile.nodes.len());
         while self.channels.len() < profile.nodes.len() {
@@ -166,27 +226,18 @@ impl MixerState {
     }
 
     /// Link or unlink the pair starting at even node `node`. Linking copies
-    /// the left node's sends to the right one with the balance centered;
-    /// unlinking hard-pans the two halves so the image is unchanged.
+    /// the first channel's level, mute and solo to the second and spreads
+    /// the pair L100 / R100; unlinking centers both channels.
     pub fn set_linked(&mut self, node: usize, linked: bool) {
         if node % 2 != 0 || node + 1 >= self.channels.len() {
             return;
         }
         self.channels[node].linked = linked;
-        let mut sends = self.channels[node].sends;
-        if linked {
-            // A mono pan carried over as balance would silence one side.
-            for s in &mut sends {
-                s.pan = 0.0;
-            }
-            self.channels[node].sends = sends;
-            self.channels[node + 1].sends = sends;
-        } else {
-            // Spread the balance into hard-panned mono channels.
-            for b in 0..3 {
-                self.channels[node].sends[b].pan = -1.0;
-                self.channels[node + 1].sends[b] = Send { pan: 1.0, ..sends[b] };
-            }
+        let lead = self.channels[node].sends;
+        for b in 0..3 {
+            let (l, r) = if linked { (-1.0, 1.0) } else { (0.0, 0.0) };
+            self.channels[node].sends[b].pan = l;
+            self.channels[node + 1].sends[b] = Send { pan: r, ..lead[b] };
         }
     }
 
@@ -204,19 +255,19 @@ impl MixerState {
                 }
                 let (Some(level), Some(master)) = (fader_to_db(s.fader), master) else { continue };
                 let level = level + master;
-                // Balance law: centre is unity on both sides, turning away
-                // from a side attenuates it linearly down to silence.
-                let gl = (1.0 - s.pan).min(1.0);
-                let gr = (1.0 + s.pan).min(1.0);
                 let db = |g: f64| -> Option<f32> {
                     if g <= 0.0001 { None } else { Some(level + 20.0 * g.log10() as f32) }
                 };
-                if strip.stereo {
-                    cells[mixer_cell(strip.node, bus, 0)] = protocol::db_to_raw(db(gl));
-                    cells[mixer_cell(strip.node + 1, bus, 1)] = protocol::db_to_raw(db(gr));
-                } else {
-                    cells[mixer_cell(strip.node, bus, 0)] = protocol::db_to_raw(db(gl));
-                    cells[mixer_cell(strip.node, bus, 1)] = protocol::db_to_raw(db(gr));
+                // Each channel of the strip is panned by its own pan with the
+                // balance law: centre is unity on both sides, turning away
+                // from a side attenuates it linearly down to silence.
+                let n = if strip.stereo { 2 } else { 1 };
+                for node in strip.node..strip.node + n {
+                    let pan = self.send(node, bus).pan;
+                    let gl = (1.0 - pan).min(1.0);
+                    let gr = (1.0 + pan).min(1.0);
+                    cells[mixer_cell(node, bus, 0)] = protocol::db_to_raw(db(gl));
+                    cells[mixer_cell(node, bus, 1)] = protocol::db_to_raw(db(gr));
                 }
             }
         }
@@ -305,24 +356,30 @@ impl MixerState {
         let n = self.channels.len();
         let mut node = 0;
         while node < n {
+            let mono = |node: usize, bus: Bus| send_from_cells(db(node, bus, 0), db(node, bus, 1));
+            // A linked pair stays linked when both channels run at the same
+            // level in every mix (each keeps its own pan).
             let pair = node % 2 == 0
                 && node + 1 < n
                 && self.channels[node].linked
-                && Bus::ALL
-                    .iter()
-                    .all(|&b| db(node, b, 1).is_none() && db(node + 1, b, 0).is_none());
+                && Bus::ALL.iter().all(|&b| (mono(node, b).fader - mono(node + 1, b).fader).abs() < 1e-3);
             if pair {
                 for bus in Bus::ALL {
-                    let send = send_from_cells(db(node, bus, 0), db(node + 1, bus, 1));
-                    self.channels[node].sends[bus.index()] = send;
-                    self.channels[node + 1].sends[bus.index()] = send;
+                    let (mut l, mut r) = (mono(node, bus), mono(node + 1, bus));
+                    if l.fader == 0.0 {
+                        // Silent: keep the usual stereo spread.
+                        (l.pan, r.pan) = (-1.0, 1.0);
+                    }
+                    self.channels[node].sends[bus.index()] = l;
+                    self.channels[node + 1].sends[bus.index()] = r;
                 }
                 node += 2;
             } else {
-                self.channels[node].linked = false;
+                if node % 2 == 0 {
+                    self.channels[node].linked = false;
+                }
                 for bus in Bus::ALL {
-                    self.channels[node].sends[bus.index()] =
-                        send_from_cells(db(node, bus, 0), db(node, bus, 1));
+                    self.channels[node].sends[bus.index()] = mono(node, bus);
                 }
                 node += 1;
             }
@@ -348,6 +405,14 @@ fn send_from_cells(l: Option<f32>, r: Option<f32>) -> Send {
     }
 }
 
+pub fn default_mix_name(bus: Bus) -> &'static str {
+    match bus {
+        Bus::Main => "Main Mix",
+        Bus::CueA => "Cue A",
+        Bus::CueB => "Cue B",
+    }
+}
+
 fn first_daw(profile: &Profile) -> usize {
     profile.nodes.iter().position(|n| n.kind == NodeKind::Daw).unwrap_or(usize::MAX)
 }
@@ -355,7 +420,7 @@ fn first_daw(profile: &Profile) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{profile_for, RAW_MUTE};
+    use crate::protocol::{profile_for, RouteSource, RAW_MUTE};
 
     fn id24() -> &'static Profile {
         profile_for(0x000d).unwrap()
@@ -415,14 +480,23 @@ mod tests {
     }
 
     #[test]
-    fn linking_centers_balance() {
+    fn linking_spreads_and_unlinking_centers() {
         let mut s = MixerState::default_for(id24());
         s.send_mut(0, Bus::Main).fader = 1.0;
-        s.send_mut(0, Bus::Main).pan = -1.0;
         s.set_linked(0, true);
+        assert_eq!((s.send(0, Bus::Main).pan, s.send(1, Bus::Main).pan), (-1.0, 1.0));
         let m = s.matrix();
         assert_eq!(m[mixer_cell(0, Bus::Main, 0)], 0);
-        assert_eq!(m[mixer_cell(1, Bus::Main, 1)], 0, "right half audible");
+        assert_eq!(m[mixer_cell(0, Bus::Main, 1)], RAW_MUTE);
+        assert_eq!(m[mixer_cell(1, Bus::Main, 1)], 0, "right channel audible");
+        // Each channel pans on its own inside the pair.
+        s.send_mut(1, Bus::Main).pan = 0.0;
+        let m = s.matrix();
+        assert_eq!(m[mixer_cell(1, Bus::Main, 0)], 0);
+        assert_eq!(m[mixer_cell(1, Bus::Main, 1)], 0);
+        s.set_linked(0, false);
+        assert_eq!((s.send(0, Bus::Main).pan, s.send(1, Bus::Main).pan), (0.0, 0.0));
+        assert_eq!(s.send(1, Bus::Main).fader, 1.0, "level carried over");
     }
 
     #[test]
@@ -430,7 +504,6 @@ mod tests {
         let mut s = MixerState::default_for(id24());
         s.channels[0].virtual_device = true; // Mic 1, mono
         s.channels[12].virtual_device = true; // DAW 3+4, linked
-        s.channels[13].label = "ignored".into();
         s.channels[12].label = "Discord".into();
         let v = s.virtual_devices(id24());
         assert_eq!(v.len(), 2);
@@ -441,6 +514,30 @@ mod tests {
         assert_eq!(v[1].description, "iD24 Discord");
         assert_eq!(v[1].channels, vec![2, 3]);
         assert!(v[1].playback);
+    }
+
+    #[test]
+    fn version_1_pairs_stay_stereo() {
+        let mut old = MixerState::default_for(id24());
+        old.version = 0;
+        for b in 0..3 {
+            old.channels[10].sends[b].pan = 0.0; // v1 balance, centered
+            old.channels[11].sends[b].pan = 0.0;
+        }
+        let s = old.sanitize(id24());
+        assert_eq!(s.version, STATE_VERSION);
+        assert_eq!((s.send(10, Bus::Main).pan, s.send(11, Bus::Main).pan), (-1.0, 1.0));
+    }
+
+    #[test]
+    fn mix_names_and_hidden() {
+        let mut s = MixerState::default_for(id24());
+        assert_eq!(s.mix_name(Bus::CueA), "Cue A");
+        s.mix_names[1] = "Drummer".into();
+        assert_eq!(s.source_label(RouteSource::CueA), "Drummer");
+        let before = s.visible_strips().len();
+        s.channels[2].hidden = true; // Digi 1+2
+        assert_eq!(s.visible_strips().len(), before - 1);
     }
 
     #[test]

@@ -82,13 +82,17 @@ with the AppIndicator extension). Without one the service still works.
 
 ### The mixer window
 
-The window mirrors the official iD Mixer. The left column lists **Main**,
+The window mirrors the official iD Mixer. The column beside the monitor
+section lists **Main**,
 **Cue A** and **Cue B** as an accordion: opening one makes it the mix the
 strips show (as do the header buttons and Ctrl+1/2/3), and holds that mix's
 master level as a knob plus the outputs it is heard on. Each strip shows,
 top to bottom, its buttons, pan, mute/solo, level readout and a meter next to
-its fader; a linked pair takes exactly two strip widths. The buttons at the
-top of each strip are:
+its fader; a linked pair takes exactly two strip widths and has a pan per
+channel (L100 / R100 when linked, both centered when unlinked). Right-click
+a strip to rename or hide it; hidden strips come back from the main menu.
+The pencil on each mix renames it everywhere. The buttons at the top of each
+strip are:
 
 - **Ø** polarity (analog inputs), **link** to pair two channels as stereo,
 - **microphone / speaker**: show that strip to other apps as its own input

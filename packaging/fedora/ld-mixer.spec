@@ -54,8 +54,8 @@ udevadm control --reload >/dev/null 2>&1 || :
 %files
 %license LICENSE
 %{_bindir}/ld-mixer
-%{_datadir}/applications/io.github.lovebycoma.LdMixer.desktop
-%{_datadir}/icons/hicolor/scalable/apps/io.github.lovebycoma.LdMixer.svg
-%{_datadir}/metainfo/io.github.lovebycoma.LdMixer.metainfo.xml
+%{_datadir}/applications/com.lovebycoma.ldmixer.desktop
+%{_datadir}/icons/hicolor/scalable/apps/com.lovebycoma.ldmixer.svg
+%{_datadir}/metainfo/com.lovebycoma.ldmixer.metainfo.xml
 %{_datadir}/ld-mixer/manifest
 %{_udevrulesdir}/70-ld-mixer.rules

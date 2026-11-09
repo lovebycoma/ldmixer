@@ -66,6 +66,12 @@ fn main() -> ExitCode {
     } else {
         false
     };
+    if !matches!(args.first().map(String::as_str), Some("gui" | "daemon")) {
+        // Exit quietly when output is piped into `head` and the like. The
+        // GUI and the service keep Rust's default (ignore SIGPIPE), since a
+        // client hanging up must not kill them.
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    }
     match args.first().map(String::as_str) {
         None | Some("help" | "-h" | "--help") => {
             help();
@@ -87,11 +93,7 @@ fn main() -> ExitCode {
         Some("start") => report(start(mock)),
         Some("stop") => report(stop()),
         Some("status") => report(status()),
-        Some(_) => match {
-            // Exit quietly when output is piped into `head` and the like.
-            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
-            cli::run(args, mock)
-        } {
+        Some(_) => match cli::run(args, mock) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("ld-mixer: {e:#}");
