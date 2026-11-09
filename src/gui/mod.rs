@@ -1,9 +1,10 @@
 //! The lD Mixer window (`ld-mixer gui`).
 //!
 //! Layout follows the official iD Mixer: a mix selector (Main / Cue A /
-//! Cue B) in the header, channel strips on the left, the selected mix's
-//! master fader, and a side panel with the monitor section, output routing
-//! (including loopback) and system settings.
+//! Cue B) in the header and as an accordion in the left column (the open
+//! mix is the one being edited, with its master as a knob), channel strips
+//! in the middle, and a right column with the monitor section, output
+//! routing (including loopback) and system settings.
 //!
 //! The window is a client of the lD Mixer daemon (started on demand): it
 //! edits a copy of the [`MixerState`], sends it to the daemon, and reflects
@@ -24,7 +25,7 @@ use ld_mixer::engine::{MonitorState, SystemState};
 use ld_mixer::ipc::{self, MonitorCmd, Notice, Request};
 use ld_mixer::vdev;
 use ld_mixer::mixer::{MixerState, Send, Strip};
-use ld_mixer::protocol::{self, monitor, Bus, NodeKind, Profile};
+use ld_mixer::protocol::{self, monitor, Bus, NodeKind, Profile, RouteSource};
 
 use widgets::{hex, Fader, Knob, Rgb};
 
@@ -52,23 +53,27 @@ fn bus_from_name(name: &str) -> Option<Bus> {
 
 const CSS: &str = r#"
 .mixer-body { background-color: #12151b; }
+.strips { border: 1px solid #2a303b; border-right: none; }
 .strip {
-  background-color: #1b1f27;
-  border: 1px solid #262b35;
-  border-radius: 12px;
-  padding: 8px 5px 8px 5px;
+  background-color: #1a1e26;
+  border-right: 1px solid #2a303b;
+  border-radius: 0;
 }
-.strip.stereo { background-color: #1d222b; }
-.strip.master { background-color: #1f2430; border-color: #313847; }
+.strip.stereo { background-color: #1c2029; }
 .strip-name { font-weight: 700; font-size: 0.85em; }
 .strip-sub { font-size: 0.72em; color: #8b93a3; }
 .value { font-size: 0.75em; font-feature-settings: "tnum"; color: #c9d1dc; }
-.chip { min-height: 3px; border-radius: 2px; }
+.chip { min-height: 4px; border-radius: 0; }
 .kind-mic .chip { background-color: #f87171; }
 .kind-digital .chip { background-color: #60a5fa; }
 .kind-daw .chip { background-color: #34d399; }
-.master .chip { background-color: currentColor; }
-button.tiny { min-height: 22px; min-width: 22px; padding: 0 4px; font-size: 0.75em; font-weight: 700; }
+button.tiny { min-height: 22px; min-width: 20px; padding: 0 2px; font-size: 0.75em; font-weight: 700; }
+.mix-dot { min-width: 10px; min-height: 10px; border-radius: 5px; }
+.mix-dot.main { background-color: #2dd4bf; }
+.mix-dot.cuea { background-color: #f59e0b; }
+.mix-dot.cueb { background-color: #a78bfa; }
+.mix-heard { font-size: 0.8em; color: #8b93a3; }
+editablelabel.mix-value { font-size: 1.5em; font-weight: 800; }
 button.mute:checked { background-color: #dc2626; color: white; }
 button.solo:checked { background-color: #eab308; color: #111; }
 button.phase:checked { background-color: #3b82f6; color: white; }
@@ -76,7 +81,7 @@ button.link-toggle:checked { background-color: #64748b; color: white; }
 button.vdev:checked { background-color: #0ea5e9; color: white; }
 editablelabel.value { min-width: 0; }
 editablelabel.value text { font-size: 0.75em; }
-editablelabel.monitor-volume text { font-size: 1.2em; }
+editablelabel.monitor-volume text { font-size: 1em; }
 button.monitor-toggle { min-height: 34px; font-weight: 800; font-size: 0.85em; }
 button.monitor-toggle:checked { background-color: #e5e7eb; color: #111; }
 button.monitor-toggle.cut:checked { background-color: #dc2626; color: white; }
@@ -137,6 +142,18 @@ struct StripUi {
     solo: gtk::ToggleButton,
 }
 
+/// One mix in the accordion: its master knob and where it is heard.
+struct MixRow {
+    bus: Bus,
+    row: adw::ExpanderRow,
+    knob: Knob,
+    value: gtk::EditableLabel,
+    heard: gtk::Label,
+}
+
+/// Width of a mono strip; a linked strip is exactly two of them.
+const STRIP_W: i32 = 92;
+
 /// Widgets that live for the whole window.
 struct Ui {
     window: adw::ApplicationWindow,
@@ -146,9 +163,7 @@ struct Ui {
     mixes: adw::ToggleGroup,
     menu_button: gtk::MenuButton,
     strips_box: gtk::Box,
-    master_name: gtk::Label,
-    master: Fader,
-    master_db: gtk::EditableLabel,
+    mix_rows: Vec<MixRow>,
     mon_knob: Knob,
     mon_label: gtk::EditableLabel,
     mon_buttons: Vec<(u8, gtk::ToggleButton)>,
@@ -209,6 +224,7 @@ impl App {
         app.rebuild_menu();
         app.rebuild_strips();
         app.sync_panel();
+        app.select_bus(Bus::Main);
         app.connect_daemon();
 
         if let Some(path) = std::env::var_os("LDMIXER_SCREENSHOT") {
@@ -299,7 +315,7 @@ impl App {
         let window = adw::ApplicationWindow::builder()
             .application(&self.gapp)
             .title("lD Mixer")
-            .default_width(1380)
+            .default_width(1700)
             .default_height(780)
             .build();
         window.add_css_class("bus-main");
@@ -339,15 +355,17 @@ impl App {
         toolbar.add_top_bar(&header);
         toolbar.add_top_bar(&banner);
 
-        // Channel strips.
+        // Channel strips, edge to edge, separated by divider lines.
         let strips_box = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
+            .spacing(0)
+            .halign(gtk::Align::Start)
             .margin_start(10)
             .margin_end(10)
             .margin_top(10)
             .margin_bottom(10)
             .build();
+        strips_box.add_css_class("strips");
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Never)
@@ -355,57 +373,95 @@ impl App {
             .child(&strips_box)
             .build();
 
-        // Master strip of the selected mix.
-        let master_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .width_request(92)
-            .margin_top(10)
-            .margin_bottom(10)
-            .margin_end(10)
+        // Left column: the three mixes as an accordion. Opening one makes it
+        // the mix the strips show; its master is a knob.
+        let mix_group = adw::PreferencesGroup::builder()
+            .title("Mixes")
+            .description("Open a mix to edit it on the strips")
             .build();
-        master_box.add_css_class("strip");
-        master_box.add_css_class("master");
-        let master_name = gtk::Label::new(Some("MAIN MIX"));
-        master_name.add_css_class("strip-name");
-        master_name.add_css_class("bus-accent");
-        let chip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        chip.add_css_class("chip");
-        chip.add_css_class("bus-accent");
-        let master_sub = gtk::Label::new(Some("Master"));
-        master_sub.add_css_class("strip-sub");
-        let master = Fader::new(0, accent(Bus::Main));
-        let master_db = value_entry("0.0 dB");
-        let a = self.clone();
-        on_value_edited(&master_db, move |l, text| {
-            let ui = a.ui();
-            if let Some(db) = parse_db(text) {
-                ui.master.set_value(protocol::db_to_fader(db));
-                a.state.borrow_mut().masters[a.bus.get().index()] = ui.master.value();
+        let mut mix_rows = Vec::new();
+        for bus in Bus::ALL {
+            let row = adw::ExpanderRow::builder()
+                .title(format!("{} Mix", bus.label()))
+                .subtitle("Master 0.0 dB")
+                .build();
+            let dot = gtk::Box::builder().valign(gtk::Align::Center).build();
+            dot.add_css_class("mix-dot");
+            dot.add_css_class(bus_name(bus));
+            row.add_prefix(&dot);
+
+            let content = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(8)
+                .margin_top(14)
+                .margin_bottom(14)
+                .margin_start(12)
+                .margin_end(12)
+                .build();
+            let knob = Knob::new(120, false, 1.0, accent(bus));
+            knob.area.set_tooltip_text(Some("Mix master level"));
+            let value = value_entry("0.0 dB");
+            value.add_css_class("mix-value");
+            value.set_tooltip_text(Some("Click to type a level in dB"));
+            let heard = gtk::Label::builder().wrap(true).justify(gtk::Justification::Center).build();
+            heard.add_css_class("mix-heard");
+            content.append(&knob.area);
+            content.append(&value);
+            content.append(&heard);
+            row.add_row(&content);
+
+            let a = self.clone();
+            row.connect_expanded_notify(move |r| {
+                if r.is_expanded() && !a.syncing.get() {
+                    a.ui().mixes.set_active_name(Some(bus_name(bus)));
+                }
+            });
+            let a = self.clone();
+            let label = value.clone();
+            knob.connect_changed(move |v| {
+                if a.syncing.get() {
+                    return;
+                }
+                a.state.borrow_mut().masters[bus.index()] = v;
+                label.set_text(&protocol::format_db(protocol::fader_to_db(v)));
+                a.sync_mix_rows();
                 a.commit();
-            }
-            l.set_text(&protocol::format_db(protocol::fader_to_db(ui.master.value())));
-        });
-        master_box.append(&master_name);
-        master_box.append(&chip);
-        master_box.append(&master_sub);
-        master_box.append(&master.area);
-        master_box.append(&master_db);
-        let a = self.clone();
-        master.connect_changed(move |v| {
-            if a.syncing.get() {
-                return;
-            }
-            a.state.borrow_mut().masters[a.bus.get().index()] = v;
-            a.ui().master_db.set_text(&protocol::format_db(protocol::fader_to_db(v)));
-            a.commit();
-        });
+            });
+            let a = self.clone();
+            let k = knob.clone();
+            on_value_edited(&value, move |l, text| {
+                if let Some(db) = parse_db(text) {
+                    k.set_value(protocol::db_to_fader(db));
+                    a.state.borrow_mut().masters[bus.index()] = k.value();
+                    a.sync_mix_rows();
+                    a.commit();
+                }
+                l.set_text(&protocol::format_db(protocol::fader_to_db(k.value())));
+            });
+            mix_group.add(&row);
+            mix_rows.push(MixRow { bus, row, knob, value, heard });
+        }
+        let left_panel = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .margin_start(14)
+            .margin_end(14)
+            .margin_top(14)
+            .margin_bottom(14)
+            .build();
+        left_panel.append(&mix_group);
+        let left_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .width_request(340)
+            .hexpand(false)
+            .child(&adw::Clamp::builder().maximum_size(360).tightening_threshold(360).child(&left_panel).build())
+            .build();
+        left_scroll.add_css_class("side-panel");
 
         let mixer_area = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         mixer_area.add_css_class("mixer-body");
         mixer_area.set_hexpand(true);
         mixer_area.append(&scroller);
-        mixer_area.append(&master_box);
 
         // Side panel.
         let panel = gtk::Box::builder()
@@ -546,6 +602,7 @@ impl App {
                 let pair = &a.profile.outputs[i];
                 if let Some(src) = pair.sources.get(r.selected() as usize) {
                     a.state.borrow_mut().routes[i] = *src;
+                    a.sync_mix_rows();
                     a.commit();
                 }
             });
@@ -616,6 +673,8 @@ impl App {
         panel_scroll.add_css_class("side-panel");
 
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        body.append(&left_scroll);
+        body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(&mixer_area);
         body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(&panel_scroll);
@@ -640,9 +699,7 @@ impl App {
             mixes,
             menu_button,
             strips_box,
-            master_name,
-            master,
-            master_db,
+            mix_rows,
             mon_knob,
             mon_label,
             mon_buttons,
@@ -680,8 +737,8 @@ impl App {
         let bus = self.bus.get();
         let b = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .width_request(if strip.stereo { 96 } else { 78 })
+            .spacing(0)
+            .width_request(if strip.stereo { 2 * STRIP_W } else { STRIP_W })
             .build();
         b.add_css_class("strip");
         b.add_css_class(match kind {
@@ -700,6 +757,10 @@ impl App {
             .tooltip_text("Double-click to rename")
             .build();
         name.add_css_class("strip-name");
+        name.set_margin_top(9);
+        name.set_margin_bottom(7);
+        name.set_margin_start(4);
+        name.set_margin_end(4);
         let click = gtk::GestureClick::new();
         let a = self.clone();
         click.connect_pressed(move |_, n, _, _| {
@@ -723,7 +784,7 @@ impl App {
         // Phase and link buttons.
         let tools = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
-            .spacing(4)
+            .spacing(2)
             .halign(gtk::Align::Center)
             .build();
         let phase_inputs = self.profile.phase_inputs as usize;
@@ -810,15 +871,40 @@ impl App {
         ms.append(&mute);
         ms.append(&solo);
 
+        // The level readout sits right above the fader's slot.
+        db_label.set_halign(gtk::Align::Start);
+        db_label.set_width_request(DB_LABEL_W);
+        let f = fader.clone();
+        let label = db_label.clone();
+        fader.area.connect_resize(move |_, w, _| {
+            let margin = (f.slot_center(w as f64) - DB_LABEL_W as f64 / 2.0).max(0.0) as i32;
+            if label.margin_start() != margin {
+                // Defer: changing layout from inside an allocation is not allowed.
+                let label = label.clone();
+                glib::idle_add_local_once(move || label.set_margin_start(margin));
+            }
+        });
+
+        let inner = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .margin_top(6)
+            .margin_bottom(8)
+            .margin_start(4)
+            .margin_end(4)
+            .vexpand(true)
+            .build();
+        inner.append(&sub);
+        inner.append(&tools);
+        inner.append(&pan.area);
+        inner.append(&pan_label);
+        inner.append(&ms);
+        inner.append(&db_label);
+        inner.append(&fader.area);
+
         b.append(&name);
         b.append(&chip);
-        b.append(&sub);
-        b.append(&tools);
-        b.append(&pan.area);
-        b.append(&pan_label);
-        b.append(&fader.area);
-        b.append(&db_label);
-        b.append(&ms);
+        b.append(&inner);
 
         let a = self.clone();
         let label = db_label.clone();
@@ -983,6 +1069,12 @@ impl App {
 
     fn select_bus(&self, bus: Bus) {
         self.bus.set(bus);
+        // Accordion: only the active mix is open.
+        self.syncing.set(true);
+        for m in &self.ui().mix_rows {
+            m.row.set_expanded(m.bus == bus);
+        }
+        self.syncing.set(false);
         let w = &self.ui().window;
         for b in Bus::ALL {
             w.remove_css_class(&format!("bus-{}", bus_name(b)));
@@ -1011,12 +1103,42 @@ impl App {
             s.mute.set_active(send.mute);
             s.solo.set_active(send.solo);
         }
-        let ui = self.ui();
-        let m = st.masters[bus.index()];
-        ui.master.set_accent(accent(bus));
-        ui.master.set_value(m);
-        ui.master_db.set_text(&protocol::format_db(protocol::fader_to_db(m)));
-        ui.master_name.set_label(&format!("{} MIX", bus.label().to_uppercase()));
+        self.syncing.set(false);
+        drop(st);
+        self.sync_mix_rows();
+    }
+
+    /// Mix knobs, their readouts and where each mix is heard.
+    fn sync_mix_rows(&self) {
+        let st = self.state.borrow();
+        self.syncing.set(true);
+        for m in &self.ui().mix_rows {
+            let v = st.masters[m.bus.index()];
+            let db = protocol::fader_to_db(v);
+            m.knob.set_value(v);
+            if !m.value.is_editing() {
+                m.value.set_text(&protocol::format_db(db));
+            }
+            m.row.set_subtitle(&format!("Master {}", protocol::format_db(db)));
+            let wanted = match m.bus {
+                Bus::Main => &[RouteSource::Main, RouteSource::Alt][..],
+                Bus::CueA => &[RouteSource::CueA][..],
+                Bus::CueB => &[RouteSource::CueB][..],
+            };
+            let outs: Vec<&str> = self
+                .profile
+                .outputs
+                .iter()
+                .zip(&st.routes)
+                .filter(|(_, r)| wanted.contains(r))
+                .map(|(o, _)| o.name)
+                .collect();
+            m.heard.set_label(&if outs.is_empty() {
+                "Not routed to any output".to_string()
+            } else {
+                format!("Heard on: {}", outs.join(", "))
+            });
+        }
         self.syncing.set(false);
     }
 
@@ -1030,6 +1152,8 @@ impl App {
             }
         }
         self.syncing.set(false);
+        drop(st);
+        self.sync_mix_rows();
     }
 
     // -- daemon notices -----------------------------------------------------------
@@ -1298,6 +1422,9 @@ fn pan_text(p: f64) -> String {
         v => format!("R{v}"),
     }
 }
+
+/// Width of a strip's level readout, centered over the fader slot.
+const DB_LABEL_W: i32 = 46;
 
 /// A small click-to-edit value readout.
 fn value_entry(text: &str) -> gtk::EditableLabel {

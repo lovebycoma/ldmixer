@@ -73,15 +73,21 @@ pub struct Fader {
     inner: Rc<FaderInner>,
 }
 
-const FADER_TOP: f64 = 14.0;
-const FADER_BOTTOM: f64 = 14.0;
+const FADER_TOP: f64 = 12.0;
+const FADER_BOTTOM: f64 = 12.0;
+/// Fader geometry, left to right: meters, scale labels, slot with cap.
+const METER_W: f64 = 9.0;
+const METER_GAP: f64 = 3.0;
+const LABEL_W: f64 = 15.0;
+const CAP_W: f64 = 30.0;
+const CAP_H: f64 = 16.0;
 const SCALE_DB: [f32; 8] = [0.0, -6.0, -12.0, -18.0, -24.0, -36.0, -48.0, -60.0];
 
 impl Fader {
-    /// `channels` meters are drawn next to the slot (0 for none).
+    /// `channels` meters are drawn left of the slot (0 for none).
     pub fn new(channels: usize, accent: Rgb) -> Fader {
         let area = gtk::DrawingArea::builder()
-            .content_width(54 + 8 * channels as i32)
+            .content_width(group_width(channels).ceil() as i32 + 4)
             .content_height(240)
             .vexpand(true)
             .focusable(true)
@@ -151,6 +157,12 @@ impl Fader {
         if let Some(cb) = self.inner.on_change.borrow().as_ref() {
             cb(v);
         }
+    }
+
+    /// Horizontal center of the slot for a widget `width` wide, so labels
+    /// above the fader can line up with it.
+    pub fn slot_center(&self, width: f64) -> f64 {
+        layout(width, self.inner.meters.borrow().len()).2
     }
 
     fn track_len(&self) -> f64 {
@@ -223,46 +235,17 @@ impl Fader {
         let len = (h - FADER_TOP - FADER_BOTTOM).max(1.0);
         let ypos = |p: f64| FADER_TOP + (1.0 - p) * len;
         let channels = self.inner.meters.borrow().len();
-        let meters_w = channels as f64 * 7.0;
-        let slot_x = ((w - meters_w) / 2.0 + 8.0).round();
-
-        // Scale: ticks and labels on the left of the slot.
-        cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
-        cr.set_font_size(8.5);
-        for db in SCALE_DB {
-            let y = ypos(protocol::db_to_fader(Some(db))).round() + 0.5;
-            set(cr, TICK);
-            cr.set_line_width(1.0);
-            cr.move_to(slot_x - 9.0, y);
-            cr.line_to(slot_x - 4.0, y);
-            let _ = cr.stroke();
-            let text = format!("{}", db.abs() as i32);
-            if let Ok(ext) = cr.text_extents(&text) {
-                set(cr, TEXT);
-                cr.move_to(slot_x - 11.0 - ext.width(), y + ext.height() / 2.0);
-                let _ = cr.show_text(&text);
-            }
-        }
-
-        // Slot.
-        set(cr, TRACK);
-        rounded_rect(cr, slot_x - 2.0, FADER_TOP - 4.0, 4.0, len + 8.0, 2.0);
-        let _ = cr.fill();
-        // Filled part of the slot, in the mix's accent color.
-        let v = self.value();
+        let (meter_x0, labels_right, slot_x) = layout(w, channels);
         let acc = self.inner.accent.get();
-        cr.set_source_rgba(acc.0, acc.1, acc.2, 0.85);
-        rounded_rect(cr, slot_x - 2.0, ypos(v), 4.0, FADER_TOP + len - ypos(v) + 4.0, 2.0);
-        let _ = cr.fill();
+        let v = self.value();
 
-        // Meters to the right of the slot.
+        // Meters on the left, sharing the slot's dB scale.
         let meters = self.inner.meters.borrow();
         let peaks = self.inner.peaks.borrow();
-        let mx0 = slot_x + 16.0;
         for (i, &m) in meters.iter().enumerate() {
-            let x = mx0 + i as f64 * 7.0;
+            let x = meter_x0 + i as f64 * (METER_W + METER_GAP);
             set(cr, METER_BG);
-            rounded_rect(cr, x, FADER_TOP, 5.0, len, 1.5);
+            rounded_rect(cr, x, FADER_TOP, METER_W, len, 1.5);
             let _ = cr.fill();
             if m > 0.002 {
                 let top = FADER_TOP + (1.0 - m as f64) * len;
@@ -272,7 +255,7 @@ impl Fader {
                 grad.add_color_stop_rgb(0.86, METER_MID.0, METER_MID.1, METER_MID.2);
                 grad.add_color_stop_rgb(1.0, METER_HIGH.0, METER_HIGH.1, METER_HIGH.2);
                 let _ = cr.set_source(&grad);
-                rounded_rect(cr, x, top, 5.0, FADER_TOP + len - top, 1.5);
+                rounded_rect(cr, x, top, METER_W, FADER_TOP + len - top, 1.5);
                 let _ = cr.fill();
             }
             let p = peaks[i].0;
@@ -281,34 +264,78 @@ impl Fader {
                 set(cr, if p > 0.95 { METER_HIGH } else { CAP });
                 cr.set_line_width(1.0);
                 cr.move_to(x, y);
-                cr.line_to(x + 5.0, y);
+                cr.line_to(x + METER_W, y);
                 let _ = cr.stroke();
             }
         }
+        drop((meters, peaks));
+
+        // Scale between the meters and the slot.
+        cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
+        cr.set_font_size(8.5);
+        for db in SCALE_DB {
+            let y = ypos(protocol::db_to_fader(Some(db))).round() + 0.5;
+            set(cr, TICK);
+            cr.set_line_width(1.0);
+            cr.move_to(labels_right + 2.0, y);
+            cr.line_to(labels_right + 5.0, y);
+            let _ = cr.stroke();
+            let text = format!("{}", db.abs() as i32);
+            if let Ok(ext) = cr.text_extents(&text) {
+                set(cr, TEXT);
+                cr.move_to(labels_right - ext.width() - ext.x_bearing(), y + ext.height() / 2.0);
+                let _ = cr.show_text(&text);
+            }
+        }
+
+        // Slot, filled below the cap in the mix's accent color.
+        set(cr, TRACK);
+        rounded_rect(cr, slot_x - 2.0, FADER_TOP - 4.0, 4.0, len + 8.0, 2.0);
+        let _ = cr.fill();
+        cr.set_source_rgba(acc.0, acc.1, acc.2, 0.85);
+        rounded_rect(cr, slot_x - 2.0, ypos(v), 4.0, FADER_TOP + len - ypos(v) + 4.0, 2.0);
+        let _ = cr.fill();
 
         // Cap.
         let cy = ypos(v);
-        let (cw, ch) = (28.0, 16.0);
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.45);
-        rounded_rect(cr, slot_x - cw / 2.0, cy - ch / 2.0 + 2.0, cw, ch, 4.0);
+        rounded_rect(cr, slot_x - CAP_W / 2.0, cy - CAP_H / 2.0 + 2.0, CAP_W, CAP_H, 4.0);
         let _ = cr.fill();
-        let grad = cairo::LinearGradient::new(0.0, cy - ch / 2.0, 0.0, cy + ch / 2.0);
+        let grad = cairo::LinearGradient::new(0.0, cy - CAP_H / 2.0, 0.0, cy + CAP_H / 2.0);
         grad.add_color_stop_rgb(0.0, CAP.0, CAP.1, CAP.2);
         grad.add_color_stop_rgb(1.0, CAP.0 * 0.72, CAP.1 * 0.72, CAP.2 * 0.75);
         let _ = cr.set_source(&grad);
-        rounded_rect(cr, slot_x - cw / 2.0, cy - ch / 2.0, cw, ch, 4.0);
+        rounded_rect(cr, slot_x - CAP_W / 2.0, cy - CAP_H / 2.0, CAP_W, CAP_H, 4.0);
         let _ = cr.fill();
         set(cr, acc);
-        cr.rectangle(slot_x - cw / 2.0 + 4.0, cy - 1.0, cw - 8.0, 2.0);
+        cr.rectangle(slot_x - CAP_W / 2.0 + 4.0, cy - 1.0, CAP_W - 8.0, 2.0);
         let _ = cr.fill();
 
         if self.area.has_focus() {
             cr.set_source_rgba(acc.0, acc.1, acc.2, 0.6);
             cr.set_line_width(1.0);
-            rounded_rect(cr, slot_x - cw / 2.0 - 1.5, cy - ch / 2.0 - 1.5, cw + 3.0, ch + 3.0, 5.0);
+            rounded_rect(cr, slot_x - CAP_W / 2.0 - 1.5, cy - CAP_H / 2.0 - 1.5, CAP_W + 3.0, CAP_H + 3.0, 5.0);
             let _ = cr.stroke();
         }
     }
+}
+
+/// Width of the meters + scale + slot group.
+fn group_width(channels: usize) -> f64 {
+    let n = channels as f64;
+    let meters = if channels > 0 { n * METER_W + (n - 1.0) * METER_GAP + 6.0 } else { 0.0 };
+    meters + LABEL_W + 6.0 + CAP_W
+}
+
+/// `(first meter x, right edge of the scale labels, slot center)`, with
+/// the group centered in the widget.
+fn layout(w: f64, channels: usize) -> (f64, f64, f64) {
+    let x0 = ((w - group_width(channels)) / 2.0).max(2.0).round();
+    let n = channels as f64;
+    let meters = if channels > 0 { n * METER_W + (n - 1.0) * METER_GAP + 6.0 } else { 0.0 };
+    let labels_right = x0 + meters + LABEL_W;
+    let slot_x = (labels_right + 6.0 + CAP_W / 2.0).round();
+    (x0, labels_right, slot_x)
 }
 
 // ---------------------------------------------------------------------------
