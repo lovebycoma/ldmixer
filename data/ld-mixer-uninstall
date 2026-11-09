@@ -98,10 +98,15 @@ case "$method" in
             exit 1
         fi
         files=$(cat "$manifest")
+        # A user-prefix install (e.g. PREFIX=~/.local) needs no root.
+        run=as_root
+        if [ -w "$(dirname "$manifest")" ]; then run=""; fi
         # shellcheck disable=SC2086
-        as_root rm -f $files
-        as_root rmdir "$(dirname "$manifest")" 2>/dev/null || true
-        if command -v udevadm >/dev/null 2>&1; then as_root udevadm control --reload || true; fi ;;
+        $run rm -f $files
+        $run rmdir "$(dirname "$manifest")" "$(dirname "$manifest")/../licenses/ld-mixer" 2>/dev/null || true
+        if command -v udevadm >/dev/null 2>&1 && [ -n "$run" ]; then
+            as_root udevadm control --reload || true
+        fi ;;
 esac
 
 echo "lD Mixer has been removed."
