@@ -160,14 +160,20 @@ impl MixerState {
     }
 
     /// Link or unlink the pair starting at even node `node`. Linking copies
-    /// the left node's sends to the right one so unlinking later is tidy.
+    /// the left node's sends to the right one with the balance centered;
+    /// unlinking hard-pans the two halves so the image is unchanged.
     pub fn set_linked(&mut self, node: usize, linked: bool) {
         if node % 2 != 0 || node + 1 >= self.channels.len() {
             return;
         }
         self.channels[node].linked = linked;
-        let sends = self.channels[node].sends;
+        let mut sends = self.channels[node].sends;
         if linked {
+            // A mono pan carried over as balance would silence one side.
+            for s in &mut sends {
+                s.pan = 0.0;
+            }
+            self.channels[node].sends = sends;
             self.channels[node + 1].sends = sends;
         } else {
             // Spread the balance into hard-panned mono channels.
@@ -351,6 +357,17 @@ mod tests {
         assert!(t.channels[10].linked, "DAW 1+2 stays a stereo pair");
         assert_eq!(t.send(10, Bus::Main).fader, 1.0);
         assert_eq!(t.matrix(), s.matrix());
+    }
+
+    #[test]
+    fn linking_centers_balance() {
+        let mut s = MixerState::default_for(id24());
+        s.send_mut(0, Bus::Main).fader = 1.0;
+        s.send_mut(0, Bus::Main).pan = -1.0;
+        s.set_linked(0, true);
+        let m = s.matrix();
+        assert_eq!(m[mixer_cell(0, Bus::Main, 0)], 0);
+        assert_eq!(m[mixer_cell(1, Bus::Main, 1)], 0, "right half audible");
     }
 
     #[test]

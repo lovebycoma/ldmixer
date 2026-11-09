@@ -97,13 +97,21 @@ pub trait ControlIo: Send {
         self.set_u8(entity::INPUT, protocol::PHASE_SELECTOR, input + 1, on as u8)
     }
 
-    /// Input meters: one level byte per mixer node.
-    fn read_input_meters(&self, nodes: usize) -> Result<Vec<u8>> {
-        let buf = self.get_mem(entity::MIXER, 0, 32)?;
+    /// Input meters, one level per mixer node in dBFS (`None` = silence).
+    ///
+    /// Measured on an iD24: each node is a little-endian int16 in 1/256 dB,
+    /// the same scale as the level controls, and digital silence reads 0.
+    fn read_input_meters(&self, nodes: usize) -> Result<Vec<Option<f32>>> {
+        let buf = self.get_mem(entity::MIXER, 0, nodes * 2)?;
         if buf.len() < nodes * 2 {
             bail!("short meter block ({} bytes)", buf.len());
         }
-        Ok((0..nodes).map(|i| buf[i * 2]).collect())
+        Ok((0..nodes)
+            .map(|i| {
+                let raw = i16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]);
+                (raw != 0 && raw != protocol::RAW_MUTE).then(|| raw as f32 / 256.0)
+            })
+            .collect())
     }
 
     fn sample_rate(&self) -> Result<i32> {

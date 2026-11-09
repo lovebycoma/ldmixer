@@ -3,6 +3,8 @@
 //! - `<model>.json`: the live mixer state, restored on the next start.
 //! - `presets/<model>/<name>.json`: named snapshots of the whole mixer.
 //!
+//! - `settings.json`: app preferences that are not part of a mix.
+//!
 //! `ld-mixer uninstall` removes this directory.
 
 use std::fs;
@@ -20,6 +22,25 @@ pub fn config_dir() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("ld-mixer")
+}
+
+/// App preferences that are not part of a mix (not stored in presets).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Settings {
+    /// Offer the hardware loopback to other apps as "iD24 Loopback".
+    #[serde(default)]
+    pub loopback_source: bool,
+}
+
+pub fn load_settings() -> Settings {
+    fs::read_to_string(config_dir().join("settings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_settings(s: &Settings) -> Result<()> {
+    write_atomic(&config_dir().join("settings.json"), &serde_json::to_string_pretty(s)?)
 }
 
 fn state_path(profile: &Profile) -> PathBuf {

@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use ld_mixer::config;
+use ld_mixer::config::{self, Settings};
+use ld_mixer::vsource::LoopbackSource;
 use ld_mixer::engine::{self, Command, Desired, EngineHandle, Event, MonitorState, SystemState};
 use ld_mixer::mixer::{MixerState, Send, Strip};
 use ld_mixer::protocol::{self, monitor, Bus, NodeKind, Profile};
@@ -144,6 +145,7 @@ struct Ui {
     talk_source: adw::ComboRow,
     dim_level: adw::SpinRow,
     routes: Vec<adw::ComboRow>,
+    loopback_switch: adw::SwitchRow,
     rate_row: adw::ActionRow,
     device_row: adw::ActionRow,
     optical_in: adw::ComboRow,
@@ -168,6 +170,10 @@ struct App {
     /// When the user last moved the monitor knob; device echoes are ignored
     /// for a moment so the knob does not jump back while dragging.
     monitor_touched: Cell<Option<Instant>>,
+    mock: bool,
+    settings: RefCell<Settings>,
+    /// The "iD24 Loopback" source for other apps, while enabled.
+    loopback: RefCell<Option<LoopbackSource>>,
 }
 
 impl App {
@@ -194,6 +200,9 @@ impl App {
             awaiting_readback: Cell::new(false),
             save_pending: Cell::new(false),
             monitor_touched: Cell::new(None),
+            mock,
+            settings: RefCell::new(config::load_settings()),
+            loopback: RefCell::new(None),
         });
         app.build_ui();
         app.install_actions();
@@ -464,7 +473,7 @@ impl App {
                 .model(&gtk::StringList::new(&labels))
                 .build();
             if pair.name == "Loopback" && self.profile.loopback_capture.is_some() {
-                row.set_subtitle("Recorded back as inputs 11+12 (experimental)");
+                row.set_subtitle("Recorded back to the computer as inputs 11+12");
             }
             let a = self.clone();
             row.connect_selected_notify(move |r| {
@@ -480,6 +489,25 @@ impl App {
             out_group.add(&row);
             routes.push(row);
         }
+
+        let loopback_switch = adw::SwitchRow::builder()
+            .title("Loopback as App Input")
+            .subtitle("Adds “iD24 Loopback” as an input for other apps while lD Mixer is open")
+            .active(self.settings.borrow().loopback_source)
+            .build();
+        loopback_switch.set_sensitive(self.profile.loopback_capture.is_some());
+        let a = self.clone();
+        loopback_switch.connect_active_notify(move |r| {
+            if a.syncing.get() {
+                return;
+            }
+            a.settings.borrow_mut().loopback_source = r.is_active();
+            if let Err(e) = config::save_settings(&a.settings.borrow()) {
+                log::warn!("saving settings failed: {e}");
+            }
+            a.update_loopback_source();
+        });
+        out_group.add(&loopback_switch);
 
         // System.
         let sys_group = adw::PreferencesGroup::builder().title("System").build();
@@ -560,6 +588,7 @@ impl App {
             talk_source,
             dim_level,
             routes,
+            loopback_switch,
             rate_row,
             device_row,
             optical_in,
@@ -861,6 +890,33 @@ impl App {
         self.flush_save();
         // Dropping the handle stops and joins the engine thread.
         self.engine.borrow_mut().take();
+        self.loopback.borrow_mut().take();
+    }
+
+    /// Start or stop the "iD24 Loopback" source to match the switch and the
+    /// connection. Never runs for the mock device.
+    fn update_loopback_source(&self) {
+        let want = self.settings.borrow().loopback_source && self.connected.get() && !self.mock;
+        let mut current = self.loopback.borrow_mut();
+        if let Some(src) = current.as_mut() {
+            if !want || !src.is_running() {
+                *current = None;
+            }
+        }
+        if want && current.is_none() {
+            match self.profile.loopback_capture.map(LoopbackSource::start) {
+                Some(Ok(src)) => *current = Some(src),
+                Some(Err(e)) => {
+                    drop(current);
+                    self.toast(&format!("Loopback input unavailable: {e}"));
+                    self.syncing.set(true);
+                    self.ui().loopback_switch.set_active(false);
+                    self.syncing.set(false);
+                    self.settings.borrow_mut().loopback_source = false;
+                }
+                None => {}
+            }
+        }
     }
 
     fn select_bus(&self, bus: Bus) {
@@ -936,6 +992,7 @@ impl App {
                 } else {
                     ui.banner.set_revealed(false);
                 }
+                self.update_loopback_source();
                 if self.first_run.get() {
                     // Never overwrite an unknown device state blindly.
                     self.awaiting_readback.set(true);
@@ -950,12 +1007,16 @@ impl App {
                 ui.device_row.set_subtitle("Not connected");
                 ui.banner.set_title(&reason);
                 ui.banner.set_revealed(true);
+                self.update_loopback_source();
                 for s in self.strips.borrow().iter() {
                     s.fader.set_meters(&[0.0, 0.0]);
                 }
             }
             Event::ReadBack { matrix, routing } => self.on_readback(matrix, routing),
             Event::Meters(levels) => {
+                // Draw meters on the fader's own dB scale.
+                let levels: Vec<f32> =
+                    levels.iter().map(|db| protocol::db_to_fader(*db) as f32).collect();
                 for s in self.strips.borrow().iter() {
                     let n = if s.strip.stereo { 2 } else { 1 };
                     let end = (s.strip.node + n).min(levels.len());
@@ -1042,11 +1103,13 @@ impl App {
             Some(r) => format!("{:.1} kHz{}", r as f64 / 1000.0, if s.streaming { "" } else { " (idle)" }),
             None => "No stream running".into(),
         });
-        if let Some(m) = s.optical_in {
-            ui.optical_in.set_selected(m.clamp(0, 1) as u32);
+        // Only 0 (ADAT) and 1 (S/PDIF) are known; other values (the iD24's
+        // output port has been seen to answer 255) are left unshown.
+        if let Some(m @ 0..=1) = s.optical_in {
+            ui.optical_in.set_selected(m as u32);
         }
-        if let Some(m) = s.optical_out {
-            ui.optical_out.set_selected(m.clamp(0, 1) as u32);
+        if let Some(m @ 0..=1) = s.optical_out {
+            ui.optical_out.set_selected(m as u32);
         }
         self.syncing.set(false);
     }

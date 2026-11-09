@@ -20,12 +20,16 @@ Device commands, read-only:
   snapshot <file.json>       save routing, matrix and monitor state to a file
   meters [offset] [len]      print the GET_MEM meter block live (Ctrl+C stops)
   watch                      print monitor-section changes live (Ctrl+C stops)
+  get <entity> <sel> <ch> <len>
+                             raw GET_CUR read (hex ok), e.g. get 0x0c 0x02 1 2
 
 Writes (need --write):
   restore <file.json>        write a snapshot back to the device
   route <out> <code>         write a raw routing code (hex ok: 0x25)
   cell <cell> <dB|mute>      write one mixer crosspoint
   monitor <selector> <value> write one monitor-section byte
+  level <entity> <sel> <ch> <dB|mute>
+                             write an int16 level, e.g. level 0x36 0x12 0 -30
 ";
 
 #[derive(Serialize, Deserialize, Default)]
@@ -77,7 +81,7 @@ pub fn run(mut args: Vec<String>, mock: bool) -> Result<()> {
         return Ok(());
     };
     let rest = &args[1..];
-    let needs_write = matches!(cmd.as_str(), "restore" | "route" | "cell" | "monitor");
+    let needs_write = matches!(cmd.as_str(), "restore" | "route" | "cell" | "monitor" | "level");
     if needs_write && !write {
         bail!("`{cmd}` writes to the device; add --write to confirm");
     }
@@ -107,6 +111,29 @@ pub fn run(mut args: Vec<String>, mock: bool) -> Result<()> {
             meters(&*open(mock)?, off, len)
         }
         "watch" => watch(&*open(mock)?),
+        "level" => {
+            let usage = "level <entity> <selector> <channel> <dB|mute>";
+            let n: Vec<i64> = rest.iter().take(3).map(|s| parse_num(s)).collect::<Result<_>>()?;
+            let [ent, sel, ch] = n[..] else { bail!(usage) };
+            let v = rest.get(3).context(usage)?;
+            let db = if v == "mute" { None } else { Some(v.parse::<f32>()?) };
+            open(mock)?.set_i16(ent as u8, sel as u8, ch as u8, protocol::db_to_raw(db))?;
+            println!("{ent:#04x}/{sel:#04x}/{ch} <- {}", protocol::format_db(db));
+            Ok(())
+        }
+        "get" => {
+            let n: Vec<i64> = rest.iter().map(|s| parse_num(s)).collect::<Result<_>>()?;
+            let [ent, sel, ch, len] = n[..] else { bail!("get <entity> <selector> <channel> <len>") };
+            let b = open(mock)?.get(ent as u8, sel as u8, ch as u8, len as usize)?;
+            let extra = if b.len() == 2 {
+                let raw = i16::from_le_bytes([b[0], b[1]]);
+                format!("  (int16 {raw} = {})", protocol::format_db(protocol::raw_to_db(raw)))
+            } else {
+                String::new()
+            };
+            println!("{}{extra}", hex(&b));
+            Ok(())
+        }
         "route" => {
             let out = parse_num(rest.first().context("route <out> <code>")?)? as u8;
             let code = parse_num(rest.get(1).context("route <out> <code>")?)? as u8;

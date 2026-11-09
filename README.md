@@ -5,7 +5,7 @@ Linux. The name is a pun: **l**D Mixer = **L**inux iD Mixer.
 
 Work in progress. Developed and tested first on an Audient iD24.
 
-- Main, Cue A and Cue B mixes, output routing and loopback, the monitor
+- Main, Cue A and Cue B mixes, output routing and hardware loopback, the monitor
   section (volume, dim, cut, alt, talkback, mono, polarity) and meters.
 - Audio keeps playing while lD Mixer is connected: it talks to the device
   through its spare DFU interface, so no kernel module or driver swap is needed.
@@ -70,6 +70,15 @@ reset it. The side panel holds the monitor section (it follows the
 front-panel knob and buttons), output routing including the loopback pair,
 and the optical port formats. Presets live in the main menu.
 
+**Loopback.** The Loopback row picks what the iD24 sends back to the
+computer (Main, a cue, or a DAW pair); it arrives as inputs 11+12 of the
+multichannel capture device. Apps that only offer "a microphone" cannot
+select those channels, so turn on **Loopback as App Input**: while lD Mixer
+is open, an "iD24 Loopback" stereo input appears for OBS, Discord, browsers
+and so on. It is created on the fly with `pw-loopback` and disappears when
+lD Mixer closes; no PipeWire configuration is written. It needs the card's
+"Multichannel Duplex" or "Pro Audio" profile.
+
 On first start lD Mixer reads the current mix from the device instead of
 overwriting it. Afterwards it restores its saved state on every connect.
 Settings live in `~/.config/ld-mixer/`.
@@ -102,6 +111,11 @@ uninstall. For a quick test without installing:
 ```sh
 sudo setfacl -m u:$USER:rw /dev/bus/usb/BBB/DDD   # from `ld-mixer scan`; lost on replug
 ```
+
+## Protocol
+
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for what lD Mixer sends and what
+was measured on hardware.
 
 ## Credits
 

@@ -10,3 +10,4 @@ pub mod engine;
 pub mod mixer;
 pub mod mock;
 pub mod protocol;
+pub mod vsource;

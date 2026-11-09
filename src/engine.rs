@@ -71,7 +71,8 @@ pub enum Command {
 pub enum Event {
     Connected(DeviceInfo),
     Disconnected(String),
-    Meters(Vec<f32>),
+    /// Input levels per mixer node, dBFS (`None` = silence).
+    Meters(Vec<Option<f32>>),
     Monitor(MonitorState),
     System(SystemState),
     ReadBack { matrix: Option<Vec<i16>>, routing: Vec<Option<u8>> },
@@ -332,9 +333,7 @@ impl Engine {
         let dev = self.dev.as_ref().expect("connected");
         let n = dev.profile().nodes.len();
         match dev.read_input_meters(n) {
-            // The byte scale is not calibrated yet; treat it as 0..255 linear
-            // in the meter's own display scale.
-            Ok(raw) => self.emit(Event::Meters(raw.iter().map(|&b| b as f32 / 255.0).collect())),
+            Ok(levels) => self.emit(Event::Meters(levels)),
             Err(e) if device::is_gone(&e) => return Err(e),
             Err(_) => {} // meters are optional; ignore stalls
         }

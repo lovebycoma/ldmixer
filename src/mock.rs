@@ -91,7 +91,13 @@ impl ControlIo for MockDevice {
                 12 | 13 => 0.3 + 0.2 * (t * 3.1 + node as f32).sin().abs(),
                 _ => 0.0,
             };
-            out[node * 2] = (base.clamp(0.0, 1.0) * 255.0) as u8;
+            if base > 0.0 {
+                // int16 in 1/256 dB, like the hardware.
+                let db = -60.0 * (1.0 - base.clamp(0.0, 1.0));
+                let raw = ((db * 256.0) as i16).to_le_bytes();
+                out[node * 2] = raw[0];
+                out[node * 2 + 1] = raw[1];
+            }
         }
         Ok(out)
     }
