@@ -871,11 +871,14 @@ impl App {
         let pan_row = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .homogeneous(true)
+            // Breathing room above (mute/solo) and below (level readout).
+            .margin_top(6)
+            .margin_bottom(10)
             .build();
         let mut pans = Vec::new();
         let channels = if strip.stereo { 2 } else { 1 };
         for (k, ch) in (node..node + channels).enumerate() {
-            let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            let col = gtk::Box::new(gtk::Orientation::Vertical, 8);
             let knob = Knob::new(38, true, if strip.stereo { k as f64 } else { 0.5 }, accent(bus));
             knob.area.set_tooltip_text(Some(match (strip.stereo, k) {
                 (false, _) => "Pan",
