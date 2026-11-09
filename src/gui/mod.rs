@@ -1,4 +1,4 @@
-//! The lD Mixer window (`ld-mixer gui`).
+//! The lD Mixer window (`ldmixer gui`).
 //!
 //! Layout follows the official iD Mixer: a mix selector (Main / Cue A /
 //! Cue B) in the header and as an accordion in the left column (the open
@@ -20,16 +20,16 @@ use std::time::{Duration, Instant};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use ld_mixer::config::{self, Settings};
-use ld_mixer::engine::{MonitorState, SystemState};
-use ld_mixer::ipc::{self, MonitorCmd, Notice, Request};
-use ld_mixer::vdev;
-use ld_mixer::mixer::{MixerState, Send, Strip};
-use ld_mixer::protocol::{self, monitor, Bus, NodeKind, Profile, RouteSource};
+use ldmixer::config::{self, Settings};
+use ldmixer::engine::{MonitorState, SystemState};
+use ldmixer::ipc::{self, MonitorCmd, Notice, Request};
+use ldmixer::vdev;
+use ldmixer::mixer::{MixerState, Send, Strip};
+use ldmixer::protocol::{self, monitor, Bus, NodeKind, Profile, RouteSource};
 
 use widgets::{hex, Fader, Knob, Rgb};
 
-pub use ld_mixer::APP_ID;
+pub use ldmixer::APP_ID;
 
 fn accent(bus: Bus) -> Rgb {
     match bus {
@@ -119,7 +119,7 @@ pub fn run(mock: bool) -> glib::ExitCode {
         }
     });
     gapp.connect_activate(move |gapp| {
-        // A second `ld-mixer gui` just raises the running window.
+        // A second `ldmixer gui` just raises the running window.
         if let Some(w) = gapp.active_window() {
             w.present();
             return;
@@ -1482,7 +1482,7 @@ impl App {
         let current = self.state.borrow().mix_names[bus.index()].clone();
         self.text_dialog(
             "Rename Mix",
-            &format!("New name for {}. Leave empty to restore the default.", ld_mixer::mixer::default_mix_name(bus)),
+            &format!("New name for {}. Leave empty to restore the default.", ldmixer::mixer::default_mix_name(bus)),
             &current,
             "Rename",
             move |a, text| {

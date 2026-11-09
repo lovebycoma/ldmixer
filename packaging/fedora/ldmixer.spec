@@ -1,13 +1,13 @@
 # Fedora / RHEL-family package. Build with packaging/fedora/build-rpm.sh,
 # which creates the source tarball (with vendored crates, so the build runs
-# offline) and calls rpmbuild. Remove with: ld-mixer uninstall (or dnf remove ld-mixer)
+# offline) and calls rpmbuild. Remove with: ldmixer uninstall (or dnf remove ldmixer)
 
 # Rust release builds carry no debug info, so there is nothing to split out.
 %global debug_package %{nil}
 %{!?_udevrulesdir:%global _udevrulesdir /usr/lib/udev/rules.d}
 
-Name:           ld-mixer
-Version:        0.5.0
+Name:           ldmixer
+Version:        0.6.0
 Release:        1%{?dist}
 Summary:        Unofficial mixer and monitor control for Audient iD interfaces
 License:        MIT
@@ -42,7 +42,7 @@ cargo test --frozen --offline --lib
 %install
 make install DESTDIR=%{buildroot} PREFIX=/usr UDEVDIR=%{_udevrulesdir}
 # %%license below installs the license file itself.
-rm -f %{buildroot}%{_datadir}/licenses/ld-mixer/LICENSE
+rm -f %{buildroot}%{_datadir}/licenses/ldmixer/LICENSE
 
 %post
 udevadm control --reload >/dev/null 2>&1 || :
@@ -53,9 +53,9 @@ udevadm control --reload >/dev/null 2>&1 || :
 
 %files
 %license LICENSE
-%{_bindir}/ld-mixer
+%{_bindir}/ldmixer
 %{_datadir}/applications/com.lovebycoma.ldmixer.desktop
 %{_datadir}/icons/hicolor/scalable/apps/com.lovebycoma.ldmixer.svg
 %{_datadir}/metainfo/com.lovebycoma.ldmixer.metainfo.xml
-%{_datadir}/ld-mixer/manifest
-%{_udevrulesdir}/70-ld-mixer.rules
+%{_datadir}/ldmixer/manifest
+%{_udevrulesdir}/70-ldmixer.rules

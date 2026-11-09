@@ -1,11 +1,11 @@
-//! Where lD Mixer keeps its files: `$XDG_CONFIG_HOME/ld-mixer`.
+//! Where lD Mixer keeps its files: `$XDG_CONFIG_HOME/ldmixer`.
 //!
 //! - `<model>.json`: the live mixer state, restored on the next start.
 //! - `presets/<model>/<name>.json`: named snapshots of the whole mixer.
 //!
 //! - `settings.json`: app preferences that are not part of a mix.
 //!
-//! `ld-mixer uninstall` removes this directory.
+//! `ldmixer uninstall` removes this directory.
 
 use std::fs;
 use std::path::PathBuf;
@@ -26,7 +26,7 @@ pub fn config_dir() -> PathBuf {
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("ld-mixer")
+    base.join("ldmixer")
 }
 
 /// App preferences that are not part of a mix (not stored in presets).

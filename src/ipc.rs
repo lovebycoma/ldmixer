@@ -22,8 +22,8 @@ use crate::vdev;
 
 pub fn socket_path() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute()) {
-        Some(dir) => dir.join("ld-mixer.sock"),
-        None => std::env::temp_dir().join(format!("ld-mixer-{}.sock", unsafe { libc::getuid() })),
+        Some(dir) => dir.join("ldmixer.sock"),
+        None => std::env::temp_dir().join(format!("ldmixer-{}.sock", unsafe { libc::getuid() })),
     }
 }
 
@@ -143,17 +143,17 @@ impl Connection {
     }
 }
 
-/// Start `ld-mixer daemon` in the background, detached from this process,
-/// with its log in `$XDG_STATE_HOME/ld-mixer/daemon.log`.
+/// Start `ldmixer daemon` in the background, detached from this process,
+/// with its log in `$XDG_STATE_HOME/ldmixer/daemon.log`.
 pub fn spawn_daemon(mock: bool) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    let exe = std::env::current_exe().context("locating the ld-mixer binary")?;
+    let exe = std::env::current_exe().context("locating the ldmixer binary")?;
     let log_dir = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
         .unwrap_or_else(std::env::temp_dir)
-        .join("ld-mixer");
+        .join("ldmixer");
     std::fs::create_dir_all(&log_dir)?;
     let log = std::fs::File::create(log_dir.join("daemon.log"))?;
     let mut cmd = std::process::Command::new(exe);
@@ -189,7 +189,7 @@ pub fn connect_or_spawn(gui: bool, mock: bool) -> Result<Connection> {
             return Ok(c);
         }
     }
-    bail!("the lD Mixer daemon did not start; see ~/.local/state/ld-mixer/daemon.log")
+    bail!("the lD Mixer daemon did not start; see ~/.local/state/ldmixer/daemon.log")
 }
 
 /// [`ControlIo`] through the daemon, so CLI commands work while it owns

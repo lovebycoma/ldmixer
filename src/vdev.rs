@@ -35,7 +35,7 @@ impl Spec {
     /// The hardware loopback pair as a stereo source.
     pub fn loopback(model: &str, channels: (u8, u8)) -> Spec {
         Spec {
-            node_name: "ld_mixer_loopback".into(),
+            node_name: "ldmixer_loopback".into(),
             description: format!("{model} Loopback"),
             playback: false,
             channels: vec![channels.0, channels.1],

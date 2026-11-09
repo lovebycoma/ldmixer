@@ -114,7 +114,7 @@ impl Drop for EngineHandle {
 pub fn spawn(mock: bool, events: async_channel::Sender<Event>) -> EngineHandle {
     let (tx, rx) = mpsc::channel();
     let thread = thread::Builder::new()
-        .name("ld-mixer-engine".into())
+        .name("ldmixer-engine".into())
         .spawn(move || Engine::new(mock, events).run(rx))
         .expect("spawn engine thread");
     EngineHandle { tx, thread: Some(thread) }

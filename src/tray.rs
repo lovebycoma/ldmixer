@@ -46,7 +46,7 @@ impl LdTray {
 
 impl Tray for LdTray {
     fn id(&self) -> String {
-        "ld-mixer".into()
+        "ldmixer".into()
     }
 
     fn title(&self) -> String {

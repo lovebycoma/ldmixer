@@ -1,14 +1,14 @@
 # Maintainer: lovebycoma <chlalsrb2003@gmail.com>
 #
 # Build and install from this checkout:   makepkg -si
-# Remove everything again:                ld-mixer uninstall    (or: sudo pacman -Rns ld-mixer)
+# Remove everything again:                ldmixer uninstall    (or: sudo pacman -Rns ldmixer)
 #
 # By default the package is built from the git checkout this PKGBUILD lives
 # in (committed changes only). Set LDMIXER_SOURCE to build from elsewhere,
 # e.g. LDMIXER_SOURCE=https://github.com/lovebycoma/ldmixer.git makepkg -si
 
-pkgname=ld-mixer
-pkgver=0.5.0.r15.g2fe0e6c
+pkgname=ldmixer
+pkgver=0.6.0.r17.g91ef976
 pkgrel=1
 pkgdesc="Unofficial mixer and monitor control for Audient iD interfaces (lD = Linux iD)"
 arch=('x86_64' 'aarch64')

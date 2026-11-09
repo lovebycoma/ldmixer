@@ -1,4 +1,4 @@
-//! Command-line subcommands of `ld-mixer`: inspection and experiments.
+//! Command-line subcommands of `ldmixer`: inspection and experiments.
 //!
 //! Read-only commands (`scan`, `dump`, `snapshot`, `meters`, `watch`) never
 //! write to the device. Commands that write (`restore`, `route`, `cell`,
@@ -9,8 +9,8 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use ld_mixer::device::{self, ControlIo};
-use ld_mixer::protocol::{self, entity, monitor, MIXER_STRIDE};
+use ldmixer::device::{self, ControlIo};
+use ldmixer::protocol::{self, entity, monitor, MIXER_STRIDE};
 use serde::{Deserialize, Serialize};
 
 pub const USAGE: &str = "\
@@ -67,8 +67,8 @@ type Device = dyn ControlIo;
 /// The device, through the daemon when it runs (it owns the USB
 /// connection), directly otherwise.
 fn open(mock: bool) -> Result<Box<Device>> {
-    if ld_mixer::ipc::daemon_running() {
-        return Ok(Box::new(ld_mixer::ipc::RemoteIo::connect()?));
+    if ldmixer::ipc::daemon_running() {
+        return Ok(Box::new(ldmixer::ipc::RemoteIo::connect()?));
     }
     device::open(mock)
 }
@@ -163,7 +163,7 @@ pub fn run(mut args: Vec<String>, mock: bool) -> Result<()> {
             println!("monitor selector {sel:#04x} <- {v}");
             Ok(())
         }
-        _ => bail!("unknown command `{cmd}`; see `ld-mixer help`"),
+        _ => bail!("unknown command `{cmd}`; see `ldmixer help`"),
     }
 }
 

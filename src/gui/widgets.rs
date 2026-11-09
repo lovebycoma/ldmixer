@@ -20,7 +20,7 @@ use gtk::gsk::{ColorStop, RoundedRect};
 use gtk::prelude::*;
 use gtk::gdk;
 
-use ld_mixer::protocol;
+use ldmixer::protocol;
 
 /// An RGB color in 0..1.
 pub type Rgb = (f64, f64, f64);

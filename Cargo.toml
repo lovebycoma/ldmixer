@@ -1,6 +1,6 @@
 [package]
-name = "ld-mixer"
-version = "0.5.0"
+name = "ldmixer"
+version = "0.6.0"
 edition = "2024"
 description = "Unofficial mixer and monitor control for Audient iD interfaces (lD = Linux iD)"
 license = "MIT"

@@ -1,10 +1,10 @@
-//! `ld-mixer daemon`: the background service.
+//! `ldmixer daemon`: the background service.
 //!
 //! The daemon is the one process that owns the USB device. It keeps the
 //! mixer state, restores it whenever the interface (re)connects, runs the
 //! virtual PipeWire devices, shows the tray icon, and serves the GUI and the
 //! CLI over a Unix socket (see [`crate::ipc`]). Closing the GUI leaves all of
-//! this running; `ld-mixer stop` or the tray's Quit ends it.
+//! this running; `ldmixer stop` or the tray's Quit ends it.
 //!
 //! Threads: the device engine, one reader per client, the socket listener,
 //! a signal waiter, a timer, and the tray all feed one channel that the main
@@ -463,7 +463,7 @@ impl Daemon {
     }
 }
 
-/// Start `ld-mixer gui` as a separate process.
+/// Start `ldmixer gui` as a separate process.
 fn open_gui(mock: bool) -> Result<()> {
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);

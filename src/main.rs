@@ -1,8 +1,8 @@
-//! `ld-mixer`: the single command of lD Mixer.
+//! `ldmixer`: the single command of lD Mixer.
 //!
-//! `ld-mixer daemon` runs the background service (device, mix, virtual
-//! devices, tray), `ld-mixer gui` opens the mixer window (starting the
-//! service if needed), `ld-mixer uninstall` removes lD Mixer, and the
+//! `ldmixer daemon` runs the background service (device, mix, virtual
+//! devices, tray), `ldmixer gui` opens the mixer window (starting the
+//! service if needed), `ldmixer uninstall` removes lD Mixer, and the
 //! remaining subcommands inspect or probe the device.
 
 mod cli;
@@ -10,7 +10,7 @@ mod gui;
 
 use std::process::ExitCode;
 
-/// The uninstaller, embedded so `ld-mixer uninstall` works however lD Mixer
+/// The uninstaller, embedded so `ldmixer uninstall` works however lD Mixer
 /// was installed.
 const UNINSTALL_SCRIPT: &str = include_str!("../data/uninstall.sh");
 
@@ -18,7 +18,7 @@ fn help() {
     println!(
         "lD Mixer {} - mixer for Audient iD interfaces (lD = Linux iD)
 
-Usage: ld-mixer <command> [options]
+Usage: ldmixer <command> [options]
 
   gui                        open the mixer window (starts the service if needed)
   daemon                     run the background service in this terminal
@@ -43,7 +43,7 @@ fn uninstall(args: &[String]) -> ExitCode {
     let status = std::process::Command::new("sh")
         .arg("-c")
         .arg(UNINSTALL_SCRIPT)
-        .arg("ld-mixer uninstall")
+        .arg("ldmixer uninstall")
         .args(args)
         .env("LDMIXER_SELF", exe)
         .status();
@@ -51,7 +51,7 @@ fn uninstall(args: &[String]) -> ExitCode {
         Ok(s) if s.success() => ExitCode::SUCCESS,
         Ok(s) => ExitCode::from(s.code().unwrap_or(1).clamp(1, 255) as u8),
         Err(e) => {
-            eprintln!("ld-mixer: cannot run the uninstaller: {e}");
+            eprintln!("ldmixer: cannot run the uninstaller: {e}");
             ExitCode::FAILURE
         }
     }
@@ -78,7 +78,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("version" | "-V" | "--version") => {
-            println!("ld-mixer {}", env!("CARGO_PKG_VERSION"));
+            println!("ldmixer {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         Some("gui") => {
@@ -89,14 +89,14 @@ fn main() -> ExitCode {
             }
         }
         Some("uninstall") => uninstall(&args[1..]),
-        Some("daemon") => report(ld_mixer::daemon::run(mock)),
+        Some("daemon") => report(ldmixer::daemon::run(mock)),
         Some("start") => report(start(mock)),
         Some("stop") => report(stop()),
         Some("status") => report(status()),
         Some(_) => match cli::run(args, mock) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("ld-mixer: {e:#}");
+                eprintln!("ldmixer: {e:#}");
                 ExitCode::FAILURE
             }
         },
@@ -107,14 +107,14 @@ fn report(r: anyhow::Result<()>) -> ExitCode {
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("ld-mixer: {e:#}");
+            eprintln!("ldmixer: {e:#}");
             ExitCode::FAILURE
         }
     }
 }
 
 fn start(mock: bool) -> anyhow::Result<()> {
-    use ld_mixer::ipc;
+    use ldmixer::ipc;
     if ipc::daemon_running() {
         println!("lD Mixer is already running");
         return Ok(());
@@ -125,7 +125,7 @@ fn start(mock: bool) -> anyhow::Result<()> {
 }
 
 fn stop() -> anyhow::Result<()> {
-    use ld_mixer::ipc::{self, Connection, Notice, Request};
+    use ldmixer::ipc::{self, Connection, Notice, Request};
     if !ipc::daemon_running() {
         println!("lD Mixer is not running");
         return Ok(());
@@ -149,9 +149,9 @@ fn stop() -> anyhow::Result<()> {
 }
 
 fn status() -> anyhow::Result<()> {
-    use ld_mixer::ipc::{self, Connection, Notice};
+    use ldmixer::ipc::{self, Connection, Notice};
     if !ipc::daemon_running() {
-        println!("service: not running (start it with `ld-mixer start` or `ld-mixer gui`)");
+        println!("service: not running (start it with `ldmixer start` or `ldmixer gui`)");
         return Ok(());
     }
     // A GUI hello returns the full picture, then we hang up.

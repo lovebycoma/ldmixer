@@ -1,6 +1,6 @@
 # lD Mixer: let the user logged in at the seat open Audient iD interfaces.
 # Install with:
-#   sudo install -m644 70-ld-mixer.rules /etc/udev/rules.d/
+#   sudo install -m644 70-ldmixer.rules /etc/udev/rules.d/
 #   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=2708
 # The file name must sort before 73-seat-late.rules for "uaccess" to apply.
 SUBSYSTEM=="usb", ATTRS{idVendor}=="2708", TAG+="uaccess"

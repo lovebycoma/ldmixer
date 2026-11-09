@@ -1,5 +1,5 @@
 //! An in-memory stand-in for an iD24, for developing and demonstrating the
-//! UI without hardware (`ld-mixer gui --mock`).
+//! UI without hardware (`ldmixer gui --mock`).
 //!
 //! It stores every write so reads return it, answers the monitor section
 //! with plausible values, and synthesizes moving meters from the mixer

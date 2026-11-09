@@ -1,7 +1,7 @@
 #!/bin/sh
-# `ld-mixer uninstall`: remove lD Mixer and everything it created, in one go.
+# `ldmixer uninstall`: remove lD Mixer and everything it created, in one go.
 #
-# This script is embedded in the ld-mixer binary and run through `sh -c`;
+# This script is embedded in the ldmixer binary and run through `sh -c`;
 # the binary passes its own path in LDMIXER_SELF.
 #
 #   1. Per-user data of the calling user: settings, presets, state, cache.
@@ -21,7 +21,7 @@ for arg in "$@"; do
         -y|--yes) assume_yes=1 ;;
         --keep-user-data) keep_user=1 ;;
         -h|--help)
-            echo "usage: ld-mixer uninstall [-y|--yes] [--keep-user-data]"
+            echo "usage: ldmixer uninstall [-y|--yes] [--keep-user-data]"
             echo "Removes the lD Mixer package (pacman, dnf/rpm, Nix or a manual install)"
             echo "and your lD Mixer settings and presets."
             exit 0 ;;
@@ -41,9 +41,8 @@ else
     cache_home="${XDG_CACHE_HOME:-$HOME/.cache}"
 fi
 
-user_paths="$config_home/ld-mixer $state_home/ld-mixer $cache_home/ld-mixer \
-$config_home/autostart/com.lovebycoma.ldmixer.desktop \
-$config_home/autostart/io.github.lovebycoma.LdMixer.desktop"
+user_paths="$config_home/ldmixer $state_home/ldmixer $cache_home/ldmixer \
+$config_home/autostart/com.lovebycoma.ldmixer.desktop"
 
 self=$(readlink -f "${LDMIXER_SELF:-$0}")
 as_root() {
@@ -59,13 +58,13 @@ elif command -v rpm >/dev/null 2>&1 && rpm -qf "$self" >/dev/null 2>&1; then
 else
     case "$self" in /nix/store/*) method=nix ;; esac
 fi
-manifest="$(dirname "$self")/../share/ld-mixer/manifest"
+manifest="$(dirname "$self")/../share/ldmixer/manifest"
 
 echo "This removes lD Mixer:"
 case "$method" in
     pacman) echo "  - package '$pkg' via: pacman -Rns $pkg" ;;
     rpm)    echo "  - package '$pkg' via: dnf remove $pkg" ;;
-    nix)    echo "  - the Nix profile entry 'ld-mixer'" ;;
+    nix)    echo "  - the Nix profile entry 'ldmixer'" ;;
     manual) echo "  - files listed in $(readlink -f "$manifest" 2>/dev/null || echo "$manifest")" ;;
 esac
 if [ "$keep_user" -eq 0 ]; then
@@ -81,7 +80,7 @@ fi
 # Stop the GUI and the background service so nothing holds the device or
 # rewrites settings; stopping the service also removes its virtual devices.
 # The bracket keeps this pattern from matching this script's command line.
-pkill -f 'ld-mixe[r] (gui|daemon)' 2>/dev/null || true
+pkill -f 'ldmixe[r] (gui|daemon)' 2>/dev/null || true
 
 if [ "$keep_user" -eq 0 ]; then
     for p in $user_paths; do
@@ -96,8 +95,8 @@ case "$method" in
         if command -v dnf >/dev/null 2>&1; then as_root dnf remove -y "$pkg"
         else as_root rpm -e "$pkg"; fi ;;
     nix)
-        if nix profile list 2>/dev/null | grep -q ld-mixer; then
-            nix profile remove ld-mixer
+        if nix profile list 2>/dev/null | grep -q ldmixer; then
+            nix profile remove ldmixer
         else
             echo "lD Mixer was installed declaratively (NixOS or Home Manager):"
             echo "remove it from your configuration and rebuild."
@@ -113,7 +112,7 @@ case "$method" in
         if [ -w "$(dirname "$manifest")" ]; then run=""; fi
         # shellcheck disable=SC2086
         $run rm -f $files
-        $run rmdir "$(dirname "$manifest")" "$(dirname "$manifest")/../licenses/ld-mixer" 2>/dev/null || true
+        $run rmdir "$(dirname "$manifest")" "$(dirname "$manifest")/../licenses/ldmixer" 2>/dev/null || true
         if command -v udevadm >/dev/null 2>&1 && [ -n "$run" ]; then
             as_root udevadm control --reload || true
         fi ;;

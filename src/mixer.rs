@@ -291,7 +291,7 @@ impl MixerState {
                     slug.push_str(second.name.rsplit(' ').next().unwrap_or(""));
                 }
                 crate::vdev::Spec {
-                    node_name: format!("ld_mixer_{slug}"),
+                    node_name: format!("ldmixer_{slug}"),
                     description: format!("{} {}", profile.name, self.strip_name(profile, s)),
                     playback: first.kind.is_playback(),
                     channels,
@@ -507,10 +507,10 @@ mod tests {
         s.channels[12].label = "Discord".into();
         let v = s.virtual_devices(id24());
         assert_eq!(v.len(), 2);
-        assert_eq!(v[0].node_name, "ld_mixer_mic_1");
+        assert_eq!(v[0].node_name, "ldmixer_mic_1");
         assert_eq!(v[0].channels, vec![0]);
         assert!(!v[0].playback);
-        assert_eq!(v[1].node_name, "ld_mixer_daw_3_4");
+        assert_eq!(v[1].node_name, "ldmixer_daw_3_4");
         assert_eq!(v[1].description, "iD24 Discord");
         assert_eq!(v[1].channels, vec![2, 3]);
         assert!(v[1].playback);

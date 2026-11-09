@@ -3,11 +3,11 @@
   #
   #   nix run github:lovebycoma/ldmixer            # try it
   #   nix profile install github:lovebycoma/ldmixer
-  #   ld-mixer uninstall                            # remove it again
+  #   ldmixer uninstall                            # remove it again
   #
   # On NixOS, USB access needs the udev rule from the package; add the module:
-  #   imports = [ ld-mixer.nixosModules.default ];
-  #   programs.ld-mixer.enable = true;
+  #   imports = [ ldmixer.nixosModules.default ];
+  #   programs.ldmixer.enable = true;
   description = "lD Mixer: unofficial mixer for Audient iD interfaces";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -20,7 +20,7 @@
     {
       packages = forAll (pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
-          pname = "ld-mixer";
+          pname = "ldmixer";
           version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
@@ -43,14 +43,14 @@
             homepage = "https://github.com/lovebycoma/ldmixer";
             license = licenses.mit;
             platforms = platforms.linux;
-            mainProgram = "ld-mixer";
+            mainProgram = "ldmixer";
           };
         };
       });
 
       nixosModules.default = { config, lib, pkgs, ... }: {
-        options.programs.ld-mixer.enable = lib.mkEnableOption "lD Mixer";
-        config = lib.mkIf config.programs.ld-mixer.enable {
+        options.programs.ldmixer.enable = lib.mkEnableOption "lD Mixer";
+        config = lib.mkIf config.programs.ldmixer.enable {
           environment.systemPackages = [ self.packages.${pkgs.system}.default ];
           services.udev.packages = [ self.packages.${pkgs.system}.default ];
         };
