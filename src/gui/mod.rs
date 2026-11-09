@@ -80,6 +80,8 @@ button.phase:checked { background-color: #3b82f6; color: white; }
 button.link-toggle:checked { background-color: #64748b; color: white; }
 button.vdev:checked { background-color: #0ea5e9; color: white; }
 editablelabel.value { min-width: 0; }
+/* Something clips the label tight to its box; at fractional scales (1.25) that cut the top row of pixels. */
+editablelabel.value > stack > label { padding-top: 2px; }
 /* The edit field keeps the label's font and drops theme padding, which clipped the text's top. */
 editablelabel > stack > text { font-size: 1em; padding: 0 2px; margin: 0; min-height: 0; }
 button.monitor-toggle { min-height: 34px; font-weight: 800; font-size: 0.85em; }
