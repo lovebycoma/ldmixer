@@ -16,6 +16,11 @@ use crate::mixer::MixerState;
 use crate::protocol::Profile;
 
 pub fn config_dir() -> PathBuf {
+    // Lets tests and experiments keep a separate configuration without
+    // changing XDG_CONFIG_HOME (which would also hide the user's GTK theme).
+    if let Some(dir) = std::env::var_os("LDMIXER_CONFIG_DIR").map(PathBuf::from).filter(|p| p.is_absolute()) {
+        return dir;
+    }
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())

@@ -67,7 +67,7 @@ const CSS: &str = r#"
 .kind-mic .chip { background-color: #f87171; }
 .kind-digital .chip { background-color: #60a5fa; }
 .kind-daw .chip { background-color: #34d399; }
-button.tiny { min-height: 0; min-width: 0; padding: 0; font-size: 0.75em; font-weight: 700; }
+button.tiny { min-height: 0; min-width: 0; padding: 0; margin: 0; font-size: 0.75em; font-weight: 700; }
 .mix-dot { min-width: 10px; min-height: 10px; border-radius: 5px; }
 .mix-dot.main { background-color: #2dd4bf; }
 .mix-dot.cuea { background-color: #f59e0b; }
@@ -107,10 +107,14 @@ pub fn run(mock: bool) -> glib::ExitCode {
         let provider = gtk::CssProvider::new();
         provider.load_from_string(CSS);
         if let Some(display) = gdk::Display::default() {
+            // Above user priority: themes such as adw-gtk3 install a full
+            // stylesheet as the user's gtk.css, which would otherwise win over
+            // these rules (e.g. giving text buttons wide padding). The rules
+            // only target lD Mixer's own classes.
             gtk::style_context_add_provider_for_display(
                 &display,
                 &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                gtk::STYLE_PROVIDER_PRIORITY_USER + 100,
             );
         }
     });
@@ -796,6 +800,9 @@ impl App {
             let phase = gtk::ToggleButton::with_label("Ø");
             phase.add_css_class("tiny");
             phase.set_size_request(TINY_W, TINY_H);
+            // No theme padding rules for text/icon buttons: one size for all.
+            phase.remove_css_class("text-button");
+            phase.remove_css_class("image-button");
             phase.add_css_class("phase");
             phase.set_tooltip_text(Some("Polarity invert"));
             phase.set_active(self.state.borrow().channels[node].phase);
@@ -816,6 +823,9 @@ impl App {
             let link = gtk::ToggleButton::builder().child(&link_icon()).build();
             link.add_css_class("tiny");
             link.set_size_request(TINY_W, TINY_H);
+            // No theme padding rules for text/icon buttons: one size for all.
+            link.remove_css_class("text-button");
+            link.remove_css_class("image-button");
             link.add_css_class("link-toggle");
             link.set_tooltip_text(Some("Link with the next channel as a stereo pair"));
             link.set_active(strip.stereo);
@@ -838,6 +848,9 @@ impl App {
             .build();
         vdev_btn.add_css_class("tiny");
         vdev_btn.set_size_request(TINY_W, TINY_H);
+        // No theme padding rules for text/icon buttons: one size for all.
+        vdev_btn.remove_css_class("text-button");
+        vdev_btn.remove_css_class("image-button");
         vdev_btn.add_css_class("vdev");
         vdev_btn.set_tooltip_text(Some(if playback {
             "Show as its own output (speaker) in other apps while lD Mixer runs"
@@ -904,11 +917,17 @@ impl App {
         let mute = gtk::ToggleButton::with_label("M");
         mute.add_css_class("tiny");
         mute.set_size_request(TINY_W, TINY_H);
+        // No theme padding rules for text/icon buttons: one size for all.
+        mute.remove_css_class("text-button");
+        mute.remove_css_class("image-button");
         mute.add_css_class("mute");
         mute.set_tooltip_text(Some("Mute in this mix"));
         let solo = gtk::ToggleButton::with_label("S");
         solo.add_css_class("tiny");
         solo.set_size_request(TINY_W, TINY_H);
+        // No theme padding rules for text/icon buttons: one size for all.
+        solo.remove_css_class("text-button");
+        solo.remove_css_class("image-button");
         solo.add_css_class("solo");
         solo.set_tooltip_text(Some("Solo in this mix"));
         ms.append(&mute);
