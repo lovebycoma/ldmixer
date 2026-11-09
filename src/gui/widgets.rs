@@ -227,8 +227,8 @@ pub struct Fader {
 // Fader geometry in em, left to right: meters, scale labels, slot with cap.
 fn fader_top() -> f64 { (cap_h() / 2.0 + em(0.1)).round() }
 fn fader_bottom() -> f64 { (cap_h() / 2.0 + em(0.1)).round() }
-fn meter_w() -> f64 { em(0.6).round() }
-fn meter_gap() -> f64 { em(0.2).round() }
+fn meter_w() -> f64 { em(1.2).round() }
+fn meter_gap() -> f64 { em(0.25).round() }
 fn label_w() -> f64 { em(1.0) }
 fn cap_w() -> f64 { em(2.0).round() }
 fn cap_h() -> f64 { em(2.4).round() }
