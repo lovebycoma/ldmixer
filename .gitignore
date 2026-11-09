@@ -5,3 +5,8 @@ build-dir/
 repo/
 *.flatpak
 .venv/
+
+
+# Added by cargo
+
+/target

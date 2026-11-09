@@ -1,0 +1,15 @@
+[package]
+name = "ld-mixer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+adw = { version = "0.9.2", package = "libadwaita", features = ["v1_7"] }
+anyhow = "1.0.104"
+async-channel = "2.5.0"
+env_logger = "0.11.11"
+gtk = { version = "0.11.5", package = "gtk4", features = ["v4_18"] }
+log = "0.4.35"
+rusb = "0.9.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
