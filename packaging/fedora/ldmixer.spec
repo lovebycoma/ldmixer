@@ -7,7 +7,7 @@
 %{!?_udevrulesdir:%global _udevrulesdir /usr/lib/udev/rules.d}
 
 Name:           ldmixer
-Version:        0.6.1
+Version:        0.6.2
 Release:        1%{?dist}
 Summary:        Unofficial mixer and monitor control for Audient iD interfaces
 License:        MIT
