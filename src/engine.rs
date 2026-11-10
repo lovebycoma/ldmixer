@@ -8,6 +8,10 @@
 //! sample rate can wedge the firmware's control plane. The engine watches
 //! the momentary rate in `/proc/asound` (free, no USB) and goes quiet for a
 //! few seconds whenever it changes.
+//!
+//! After a system sleep the interface may have been reset while the USB
+//! handle survived (no disconnect is seen), so the engine treats a resume
+//! like a reconnect and writes the whole mix again.
 
 use std::collections::HashMap;
 use std::fs;
@@ -25,6 +29,9 @@ const QUANTUM_EVERY: Duration = Duration::from_secs(5);
 const SYSTEM_EVERY: Duration = Duration::from_millis(1000);
 const RECONNECT_EVERY: Duration = Duration::from_millis(2000);
 const RATE_CHANGE_QUIET: Duration = Duration::from_secs(3);
+/// A tick gap in boot time (which counts sleep) this much longer than in
+/// monotonic time (which does not) means the system slept.
+const SLEEP_GAP: Duration = Duration::from_secs(2);
 
 /// The hardware state lD Mixer wants. Sent whole; the engine diffs it.
 #[derive(Clone, Debug, Default)]
@@ -118,9 +125,41 @@ pub fn spawn(mock: bool, events: async_channel::Sender<Event>) -> EngineHandle {
     let (tx, rx) = mpsc::channel();
     let thread = thread::Builder::new()
         .name("ldmixer-engine".into())
-        .spawn(move || Engine::new(mock, events).run(rx))
+        .spawn(move || {
+            // A panic must not leave the daemon running without an engine
+            // (nothing would ever reconnect): start a fresh one instead.
+            loop {
+                let engine = Engine::new(mock, events.clone());
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.run(&rx))) {
+                    Ok(()) => return,
+                    Err(_) => {
+                        log::error!("device engine crashed; restarting it");
+                        thread::sleep(RECONNECT_EVERY);
+                    }
+                }
+            }
+        })
         .expect("spawn engine thread");
     EngineHandle { tx, thread: Some(thread) }
+}
+
+/// Monotonic time (stops during sleep) and boot time (keeps counting).
+fn clocks() -> (Duration, Duration) {
+    let read = |id| {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: `ts` is a valid, writable timespec.
+        unsafe { libc::clock_gettime(id, &mut ts) };
+        Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+    };
+    (read(libc::CLOCK_MONOTONIC), read(libc::CLOCK_BOOTTIME))
+}
+
+/// True when boot time moved further than monotonic time between two
+/// [`clocks`] readings, i.e. the system slept in between.
+fn slept_between(before: (Duration, Duration), after: (Duration, Duration)) -> bool {
+    let mono = after.0.saturating_sub(before.0);
+    let boot = after.1.saturating_sub(before.1);
+    boot > mono + SLEEP_GAP
 }
 
 struct Engine {
@@ -144,6 +183,8 @@ struct Engine {
     watched: bool,
     /// The iD's `/proc/asound/cardN`, found once per connection.
     card: Option<std::path::PathBuf>,
+    /// [`clocks`] at the previous tick, to notice a system sleep.
+    last_clocks: (Duration, Duration),
 }
 
 impl Engine {
@@ -168,6 +209,7 @@ impl Engine {
             quantum: ((None, false), None),
             watched: false,
             card: None,
+            last_clocks: clocks(),
         }
     }
 
@@ -175,7 +217,7 @@ impl Engine {
         let _ = self.events.send_blocking(ev);
     }
 
-    fn run(mut self, rx: Receiver<Command>) {
+    fn run(mut self, rx: &Receiver<Command>) {
         loop {
             // Wait for a command or the next tick, then drain the queue,
             // keeping only the newest Apply (fader drags send many).
@@ -225,7 +267,7 @@ impl Engine {
     }
 
     fn run_command(&mut self, cmd: Command) -> anyhow::Result<()> {
-        let dev = self.dev.as_ref().expect("connected");
+        let Some(dev) = self.dev.as_ref() else { return Ok(()) };
         match cmd {
             Command::MonitorBool(sel, on) => {
                 dev.set_u8(entity::MONITOR, sel, 0, on as u8)?;
@@ -287,6 +329,7 @@ impl Engine {
     }
 
     fn disconnect(&mut self, reason: String) {
+        log::warn!("device disconnected: {reason}");
         self.dev = None;
         self.cells.clear();
         self.routes.clear();
@@ -303,6 +346,16 @@ impl Engine {
 
     fn tick(&mut self) {
         let now = Instant::now();
+        let clocks = clocks();
+        let slept = slept_between(self.last_clocks, clocks);
+        self.last_clocks = clocks;
+        if slept && self.dev.is_some() {
+            // The interface may have been reset during sleep while the handle
+            // stayed valid; reopen it so the whole mix is written again. Wait
+            // one reconnect interval for USB and the audio stream to settle.
+            self.disconnect("the system resumed from sleep".into());
+            self.last_attempt = Some(now);
+        }
         if self.dev.is_none() {
             if self.last_attempt.is_none_or(|t| now - t >= RECONNECT_EVERY) {
                 self.last_attempt = Some(now);
@@ -323,14 +376,22 @@ impl Engine {
         if self.dev.is_none() {
             return;
         }
+        // Every step can find the device gone (check() then disconnects), so
+        // look again before the next one touches it.
         if self.watched {
             let r = self.poll_meters();
             self.check(r);
+            if self.dev.is_none() {
+                return;
+            }
         }
         if now - self.last_monitor >= MONITOR_EVERY {
             self.last_monitor = now;
             let r = self.poll_monitor();
             self.check(r);
+            if self.dev.is_none() {
+                return;
+            }
         }
         if now - self.last_system >= SYSTEM_EVERY {
             self.last_system = now;
@@ -342,7 +403,7 @@ impl Engine {
         match device::open(self.mock) {
             Ok(dev) => {
                 let info = dev.info().clone();
-                log::info!("connected to {} on interface {}", info.profile.name, info.interface);
+                log::warn!("connected to {} on interface {}", info.profile.name, info.interface);
                 self.dev = Some(dev);
                 self.card = None;
                 self.last_error = None;
@@ -361,7 +422,7 @@ impl Engine {
     }
 
     fn apply(&mut self, d: &Desired) -> anyhow::Result<()> {
-        let dev = self.dev.as_ref().expect("connected");
+        let Some(dev) = self.dev.as_ref() else { return Ok(()) };
         for (cell, &raw) in d.matrix.iter().enumerate() {
             if self.cells.get(&cell) != Some(&raw) {
                 dev.set_mixer_cell(cell, raw)?;
@@ -384,7 +445,7 @@ impl Engine {
     }
 
     fn poll_meters(&mut self) -> anyhow::Result<()> {
-        let dev = self.dev.as_ref().expect("connected");
+        let Some(dev) = self.dev.as_ref() else { return Ok(()) };
         let n = dev.profile().nodes.len();
         match dev.read_input_meters(n) {
             Ok(levels) => self.emit(Event::Meters(levels)),
@@ -395,7 +456,7 @@ impl Engine {
     }
 
     fn poll_monitor(&mut self) -> anyhow::Result<()> {
-        let dev = self.dev.as_ref().expect("connected");
+        let Some(dev) = self.dev.as_ref() else { return Ok(()) };
         let b = |sel| dev.get_u8(entity::MONITOR, sel, 0);
         let l = |sel| dev.get_i16(entity::MONITOR, sel, 0).map(protocol::raw_to_db);
         let state = MonitorState {
@@ -419,7 +480,7 @@ impl Engine {
 
     fn poll_system(&mut self) {
         let stream0 = self.stream0();
-        let dev = self.dev.as_ref().expect("connected");
+        let Some(dev) = self.dev.as_ref() else { return };
         let (proc_rate, streaming) = proc_stream_rate(dev.info().mock, stream0.as_deref());
         let state = SystemState {
             sample_rate: proc_rate.or_else(|| dev.sample_rate().ok().map(|r| r as u32)),
@@ -527,5 +588,69 @@ fn pipewire_quantum() -> (Option<u32>, bool) {
     match value("clock.force-quantum") {
         Some(q) if q > 0 => (Some(q), true),
         _ => (value("clock.quantum"), false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A device that has gone away: every transfer fails like an unplug.
+    struct GoneDevice(DeviceInfo);
+
+    impl ControlIo for GoneDevice {
+        fn info(&self) -> &DeviceInfo {
+            &self.0
+        }
+        fn set(&self, _: u8, _: u8, _: u8, _: &[u8]) -> anyhow::Result<()> {
+            Err(rusb::Error::NoDevice.into())
+        }
+        fn get(&self, _: u8, _: u8, _: u8, _: usize) -> anyhow::Result<Vec<u8>> {
+            Err(rusb::Error::NoDevice.into())
+        }
+        fn get_mem(&self, _: u8, _: u16, _: usize) -> anyhow::Result<Vec<u8>> {
+            Err(rusb::Error::NoDevice.into())
+        }
+    }
+
+    fn engine_with_gone_device() -> (Engine, async_channel::Receiver<Event>) {
+        let (tx, rx) = async_channel::unbounded();
+        let mut e = Engine::new(true, tx);
+        let info = DeviceInfo {
+            profile: protocol::profile_for(0x000d).unwrap(),
+            serial: None,
+            firmware: 0,
+            interface: 4,
+            mock: true,
+        };
+        e.dev = Some(Box::new(GoneDevice(info)));
+        // No reconnect attempt inside the test tick.
+        e.last_attempt = Some(Instant::now());
+        (e, rx)
+    }
+
+    #[test]
+    fn device_lost_mid_tick_disconnects_without_panic() {
+        // Meters, monitor and system polls all due in the same tick: the
+        // meter poll finds the device gone and the later polls must not
+        // touch it (they used to panic and kill the engine thread).
+        let (mut e, rx) = engine_with_gone_device();
+        e.watched = true;
+        e.last_monitor = Instant::now() - MONITOR_EVERY;
+        e.last_system = Instant::now() - SYSTEM_EVERY;
+        e.tick();
+        assert!(e.dev.is_none());
+        assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|ev| matches!(ev, Event::Disconnected(_))));
+    }
+
+    #[test]
+    fn sleep_is_detected_from_the_clock_gap() {
+        let s = Duration::from_secs;
+        assert!(!slept_between((s(10), s(10)), (s(11), s(11))));
+        assert!(!slept_between((s(10), s(10)), (s(11), s(12))));
+        assert!(slept_between((s(10), s(10)), (s(11), s(400))));
+        // A real reading pair taken now has no gap.
+        let a = clocks();
+        assert!(!slept_between(a, clocks()));
     }
 }

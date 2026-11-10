@@ -112,7 +112,7 @@ It stops the service, deletes lD Mixer's files in your home folder, and removes 
 - **"in use by another program":** another lD Mixer, BiD, Monix or MixiD instance holds it. Check `ldmixer status`.
 - **No sound:** the front-panel volume knob first, then faders, the mix master and **Outputs** routing.
 - **Virtual input error:** set the card profile to Multichannel Duplex or Pro Audio, and install `pw-loopback` and `pw-dump`.
-- **Anything else:** read `~/.local/state/ldmixer/daemon.log`, or run `ldmixer daemon` in a terminal.
+- **Anything else:** read `~/.local/state/ldmixer/daemon.log` (the previous run's log is `daemon.log.old`), or run `ldmixer daemon` in a terminal.
 
 ## Development
 

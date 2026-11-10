@@ -360,6 +360,8 @@ impl Daemon {
     fn engine_event(&mut self, ev: Event) {
         match ev {
             Event::Connected(info) => {
+                // A restarted engine starts unwatched; tell it again.
+                self.engine.send(Command::Watch(self.watched));
                 self.device = Some(DeviceSummary::from(&info));
                 self.device_error = None;
                 let n = self.device_notice();

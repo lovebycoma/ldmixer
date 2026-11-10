@@ -186,6 +186,8 @@ pub fn spawn_daemon(mock: bool) -> Result<()> {
         .unwrap_or_else(std::env::temp_dir)
         .join("ldmixer");
     std::fs::create_dir_all(&log_dir)?;
+    // Keep the previous run's log: it holds why that daemon stopped.
+    let _ = std::fs::rename(log_dir.join("daemon.log"), log_dir.join("daemon.log.old"));
     let log = std::fs::File::create(log_dir.join("daemon.log"))?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("daemon");
