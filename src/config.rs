@@ -4,6 +4,7 @@
 //! - `presets/<model>/<name>.json`: named snapshots of the whole mixer.
 //!
 //! - `settings.json`: app preferences that are not part of a mix.
+//! - `<model>.monitor.json`: the last monitor volume, for restoring it on connect.
 //!
 //! `ldmixer uninstall` removes this directory.
 
@@ -35,6 +36,33 @@ pub struct Settings {
     /// Offer the hardware loopback to other apps as "iD24 Loopback".
     #[serde(default)]
     pub loopback_source: bool,
+    /// Write the last monitor volume back when the interface connects (the
+    /// iD24 powers up with it at -inf).
+    #[serde(default)]
+    pub restore_monitor_volume: bool,
+}
+
+/// Device values remembered outside the mix (not stored in presets).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MonitorMemory {
+    /// Last monitor volume the device reported, raw (1/256 dB, `0x8000` = silence).
+    #[serde(default)]
+    pub volume: Option<i16>,
+}
+
+fn monitor_path(profile: &Profile) -> PathBuf {
+    config_dir().join(format!("{}.monitor.json", profile.name))
+}
+
+pub fn load_monitor_memory(profile: &Profile) -> MonitorMemory {
+    fs::read_to_string(monitor_path(profile))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_monitor_memory(profile: &Profile, m: &MonitorMemory) -> Result<()> {
+    write_atomic(&monitor_path(profile), &serde_json::to_string_pretty(m)?)
 }
 
 pub fn load_settings() -> Settings {

@@ -14,7 +14,7 @@ lD Mixer replaces Audient's iD Mixer on Linux and targets the iD family in gener
 4. **Native packages, no Flatpak.** Arch (`packaging/arch/PKGBUILD`, built with `makepkg`), Fedora (`packaging/fedora/ldmixer.spec`), Nix (`flake.nix`), and `make install`. Every install path must be fully removable with **`ldmixer uninstall`**.
 5. **One command, `ldmixer`.** `ldmixer gui` opens the window, `ldmixer uninstall` removes everything; no extra binaries.
 6. **Rust.** GTK 4 (gtk4-rs) + libadwaita, rusb, ksni.
-7. **US English** for code comments and docs. There is no translated README; keep `README.md` short.
+7. **US English** for code comments and docs. There is no translated README; keep `README.md` short. Agents always reply to the owner in English and work in English (commit messages, tool descriptions, notes), even when the owner writes in another language.
 8. **No hard wrapping in Markdown.** One paragraph or list item is one line; break lines only for a real new paragraph, list item, table row or code block. The owner edits these files by hand.
 9. **Behave like Audient's iD Mixer**: Main, Cue A, Cue B, monitor section, routing, loopback.
 10. Commit messages end with the co-author trailer the session provides. Commit or push only when asked or as part of an agreed task.
@@ -42,7 +42,7 @@ ldmixer CLI │                ├ vdev::Manager ── pw-loopback children    
             └───────────────────────────────────────────────────────────────┘
 ```
 
-- **Daemon** (`src/daemon.rs`): single owner of the device. All inputs (engine events, client requests, tray actions, timer, signals) go through one channel to the main thread, so state needs no locks. Restores the mix on connect (first run: reads the device's mix instead of writing), autosaves one second after the last change, reconciles virtual devices.
+- **Daemon** (`src/daemon.rs`): single owner of the device. All inputs (engine events, client requests, tray actions, timer, signals) go through one channel to the main thread, so state needs no locks. Restores the mix on connect (first run: reads the device's mix instead of writing), autosaves one second after the last change, reconciles virtual devices. Remembers the last monitor volume (`<model>.monitor.json`, outside the mix and presets) and, when the "Restore Volume" setting is on, writes it back on connect (the iD24 powers up at -inf), retrying for 10 s and not recording the power-up value meanwhile.
 - **Engine** (`src/engine.rs`): background thread with the USB handle. Diffs the desired state and writes only changed cells/routes; polls meters (~30 Hz), the monitor section (150 ms), system state (1 s; PipeWire quantum every 5 s). Goes quiet for 3 s when the stream rate changes (control traffic during a rate change can wedge the firmware).
 - **IPC** (`src/ipc.rs`): newline-delimited JSON `Request`/`Notice`. `RemoteIo` implements `ControlIo` over the socket so CLI commands work while the daemon runs. `connect_or_spawn` starts the daemon on demand.
 - **Device layer** (`src/device.rs`): `ControlIo` trait with typed helpers; `UsbDevice` (real) and `mock::MockDevice` (`--mock`).

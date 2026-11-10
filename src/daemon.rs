@@ -16,11 +16,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
-use crate::config::{self, Settings};
+use crate::config::{self, MonitorMemory, Settings};
 use crate::engine::{self, Command, Desired, EngineHandle, Event, MonitorState, SystemState};
 use crate::ipc::{self, DeviceSummary, MonitorCmd, Notice, Request};
 use crate::mixer::MixerState;
@@ -58,6 +58,13 @@ struct Daemon {
     device: Option<DeviceSummary>,
     device_error: Option<String>,
     monitor: Option<MonitorState>,
+    /// Last monitor volume seen, saved like the state (debounced).
+    monitor_memory: MonitorMemory,
+    monitor_dirty: bool,
+    monitor_changed: Instant,
+    /// A monitor volume being restored after connect, and until when to retry.
+    /// While it is pending, the device's power-up value is not remembered.
+    restoring: Option<(i16, Instant)>,
     system: Option<SystemState>,
     vdevs: vdev::Manager,
     clients: HashMap<u64, Client>,
@@ -139,6 +146,10 @@ pub fn run(mock: bool) -> Result<()> {
         device: None,
         device_error: None,
         monitor: None,
+        monitor_memory: config::load_monitor_memory(profile),
+        monitor_dirty: false,
+        monitor_changed: Instant::now(),
+        restoring: None,
         system: None,
         vdevs: vdev::Manager::default(),
         clients: HashMap::new(),
@@ -201,6 +212,7 @@ impl Daemon {
             Msg::Quit => return false,
             Msg::Tick => {
                 self.save(false);
+                self.retry_restore();
                 if self.vdevs.maintain() {
                     self.broadcast_vdevs();
                 }
@@ -335,6 +347,7 @@ impl Daemon {
                 } else {
                     self.apply();
                 }
+                self.start_restore();
                 self.reconcile_vdevs();
                 self.update_tray();
             }
@@ -342,6 +355,7 @@ impl Daemon {
                 self.device = None;
                 self.device_error = Some(reason);
                 self.monitor = None;
+                self.restoring = None;
                 let n = self.device_notice();
                 self.broadcast(&n, false);
                 self.reconcile_vdevs();
@@ -366,6 +380,7 @@ impl Daemon {
             }
             Event::Meters(m) => self.broadcast(&Notice::Meters(m), false),
             Event::Monitor(m) => {
+                self.remember_monitor(&m);
                 self.monitor = Some(m.clone());
                 self.broadcast(&Notice::Monitor(m), false);
                 self.update_tray();
@@ -400,6 +415,54 @@ impl Daemon {
             if let Err(e) = config::save_state(self.profile, &self.state) {
                 log::warn!("saving state failed: {e}");
             }
+        }
+        // The knob turns in many small steps; save once it settles.
+        if self.monitor_dirty && (now || self.monitor_changed.elapsed() >= Duration::from_secs(1)) {
+            self.monitor_dirty = false;
+            if let Err(e) = config::save_monitor_memory(self.profile, &self.monitor_memory) {
+                log::warn!("saving the monitor volume failed: {e}");
+            }
+        }
+    }
+
+    /// After connect: write the remembered monitor volume back, if enabled.
+    fn start_restore(&mut self) {
+        self.restoring = None;
+        if !self.settings.restore_monitor_volume {
+            return;
+        }
+        if let Some(raw) = self.monitor_memory.volume {
+            log::info!("restoring the monitor volume to {:?} dB", protocol::raw_to_db(raw));
+            self.restoring = Some((raw, Instant::now() + RESTORE_FOR));
+            self.engine.send(Command::MonitorLevel(monitor::VOLUME, protocol::raw_to_db(raw)));
+        }
+    }
+
+    /// Resend a restore the device has not taken yet (the engine drops
+    /// writes while it waits out a sample-rate change).
+    fn retry_restore(&mut self) {
+        let Some((raw, until)) = self.restoring else { return };
+        if Instant::now() >= until {
+            log::warn!("the monitor volume was not restored; the device kept its own value");
+            self.restoring = None;
+        } else if self.device.is_some() {
+            self.engine.send(Command::MonitorLevel(monitor::VOLUME, protocol::raw_to_db(raw)));
+        }
+    }
+
+    /// Track the monitor volume the device reports, so it can be restored.
+    fn remember_monitor(&mut self, m: &MonitorState) {
+        let raw = protocol::db_to_raw(m.volume);
+        if let Some((want, _)) = self.restoring {
+            if !same_volume(raw, want) {
+                return; // still the power-up value; do not remember it
+            }
+            self.restoring = None;
+        }
+        if self.monitor_memory.volume != Some(raw) {
+            self.monitor_memory.volume = Some(raw);
+            self.monitor_dirty = true;
+            self.monitor_changed = Instant::now();
         }
     }
 
@@ -461,6 +524,17 @@ impl Daemon {
         }
         true
     }
+}
+
+/// How long to keep retrying a monitor volume restore after connect (covers
+/// the engine's 3 s pause after a sample-rate change, which is common while
+/// the sound server starts).
+const RESTORE_FOR: Duration = Duration::from_secs(10);
+
+/// Raw monitor volumes within half a dB count as the same (in case the
+/// firmware rounds what it is sent to its encoder steps).
+fn same_volume(a: i16, b: i16) -> bool {
+    (a as i32 - b as i32).abs() <= 128
 }
 
 /// Start `ldmixer gui` as a separate process.

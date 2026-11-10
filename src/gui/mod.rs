@@ -209,6 +209,7 @@ struct Ui {
     dim_level: adw::SpinRow,
     routes: Vec<adw::ComboRow>,
     loopback_switch: adw::SwitchRow,
+    restore_volume: adw::SwitchRow,
     rate_row: adw::ActionRow,
     quantum_row: adw::ActionRow,
     device_row: adw::ActionRow,
@@ -629,6 +630,21 @@ impl App {
         mon_opts.add(&mono_mode);
         mon_opts.add(&talk_source);
         mon_opts.add(&dim_level);
+        let restore_volume = adw::SwitchRow::builder()
+            .title("Restore Volume")
+            .subtitle("Sets the monitor volume back to its last value when the interface connects")
+            .active(self.settings.borrow().restore_monitor_volume)
+            .build();
+        let a = self.clone();
+        restore_volume.connect_active_notify(move |r| {
+            if a.syncing.get() {
+                return;
+            }
+            a.settings.borrow_mut().restore_monitor_volume = r.is_active();
+            let s = a.settings.borrow().clone();
+            a.send(Request::SetSettings(s));
+        });
+        mon_opts.add(&restore_volume);
 
         // Output routing, loopback included.
         let out_group = adw::PreferencesGroup::builder()
@@ -809,6 +825,7 @@ impl App {
             dim_level,
             routes,
             loopback_switch,
+            restore_volume,
             rate_row,
             quantum_row,
             device_row,
@@ -1405,6 +1422,7 @@ impl App {
             Notice::Settings(st) => {
                 self.syncing.set(true);
                 ui.loopback_switch.set_active(st.loopback_source);
+                ui.restore_volume.set_active(st.restore_monitor_volume);
                 self.syncing.set(false);
                 *self.settings.borrow_mut() = st;
             }
