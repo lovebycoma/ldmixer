@@ -76,6 +76,9 @@ pub enum Command {
     ReadBack,
     /// A raw request on behalf of a client; answered with `Event::RawReply`.
     Raw { client: u64, op: crate::ipc::RawOp },
+    /// Whether a window is watching. Meters and the PipeWire quantum are
+    /// only for display, so they are polled only while one is.
+    Watch(bool),
     Quit,
 }
 
@@ -138,6 +141,9 @@ struct Engine {
     proc_rate: Option<String>,
     quiet_until: Option<Instant>,
     quantum: ((Option<u32>, bool), Option<Instant>),
+    watched: bool,
+    /// The iD's `/proc/asound/cardN`, found once per connection.
+    card: Option<std::path::PathBuf>,
 }
 
 impl Engine {
@@ -160,6 +166,8 @@ impl Engine {
             proc_rate: None,
             quiet_until: None,
             quantum: ((None, false), None),
+            watched: false,
+            card: None,
         }
     }
 
@@ -194,6 +202,14 @@ impl Engine {
         match cmd {
             Command::Quit => return false,
             Command::Apply(d) => self.pending = Some(d),
+            Command::Watch(on) => {
+                if on && !self.watched {
+                    // Fresh quantum and system state for the new viewer.
+                    self.quantum.1 = None;
+                    self.last_system = Instant::now() - SYSTEM_EVERY;
+                }
+                self.watched = on;
+            }
             Command::Raw { client, op: _ } if self.dev.is_none() => {
                 self.emit(Event::RawReply { client, result: Err("no device connected".into()) });
             }
@@ -254,7 +270,7 @@ impl Engine {
                 self.phases.clear();
                 self.monitor = None;
             }
-            Command::Apply(_) | Command::Quit => unreachable!(),
+            Command::Apply(_) | Command::Watch(_) | Command::Quit => unreachable!(),
         }
         Ok(())
     }
@@ -307,8 +323,10 @@ impl Engine {
         if self.dev.is_none() {
             return;
         }
-        let r = self.poll_meters();
-        self.check(r);
+        if self.watched {
+            let r = self.poll_meters();
+            self.check(r);
+        }
         if now - self.last_monitor >= MONITOR_EVERY {
             self.last_monitor = now;
             let r = self.poll_monitor();
@@ -326,6 +344,7 @@ impl Engine {
                 let info = dev.info().clone();
                 log::info!("connected to {} on interface {}", info.profile.name, info.interface);
                 self.dev = Some(dev);
+                self.card = None;
                 self.last_error = None;
                 self.last_monitor = Instant::now() - MONITOR_EVERY;
                 self.last_system = Instant::now() - SYSTEM_EVERY;
@@ -399,8 +418,9 @@ impl Engine {
     }
 
     fn poll_system(&mut self) {
+        let stream0 = self.stream0();
         let dev = self.dev.as_ref().expect("connected");
-        let (proc_rate, streaming) = proc_stream_rate(dev.info().mock);
+        let (proc_rate, streaming) = proc_stream_rate(dev.info().mock, stream0.as_deref());
         let state = SystemState {
             sample_rate: proc_rate.or_else(|| dev.sample_rate().ok().map(|r| r as u32)),
             streaming,
@@ -410,7 +430,7 @@ impl Engine {
             quantum_forced: false,
         };
         let mut state = state;
-        if self.quantum.1.is_none_or(|t| t.elapsed() >= QUANTUM_EVERY) {
+        if self.watched && self.quantum.1.is_none_or(|t| t.elapsed() >= QUANTUM_EVERY) {
             self.quantum = (pipewire_quantum(), Some(Instant::now()));
         }
         (state.quantum, state.quantum_forced) = self.quantum.0;
@@ -423,13 +443,26 @@ impl Engine {
     /// Go quiet when the stream's momentary rate changes.
     fn watch_rate(&mut self) {
         let mock = self.dev.as_ref().is_some_and(|d| d.info().mock);
-        let now = read_stream_status(mock);
+        let now = if mock { None } else { self.stream0().as_deref().map(stream_status) };
         if self.proc_rate.is_some() && now != self.proc_rate {
             log::info!("stream rate changed; pausing control traffic");
             self.quiet_until = Some(Instant::now() + RATE_CHANGE_QUIET);
             self.last_system = Instant::now(); // re-read after the quiet period
         }
         self.proc_rate = now;
+    }
+
+    /// The playback stream's procfs status. Runs every tick, so the card
+    /// directory is looked up once and only searched again when it fails.
+    fn stream0(&mut self) -> Option<String> {
+        if self.dev.as_ref().is_some_and(|d| d.info().mock) {
+            return None;
+        }
+        if let Some(text) = self.card.as_ref().and_then(|c| fs::read_to_string(c.join("stream0")).ok()) {
+            return Some(text);
+        }
+        self.card = proc_card();
+        fs::read_to_string(self.card.as_ref()?.join("stream0")).ok()
     }
 }
 
@@ -448,25 +481,19 @@ fn proc_card() -> Option<std::path::PathBuf> {
 
 /// Raw "Status/Momentary freq" lines of the playback stream, used only to
 /// detect changes.
-fn read_stream_status(mock: bool) -> Option<String> {
-    if mock {
-        return None;
-    }
-    let text = fs::read_to_string(proc_card()?.join("stream0")).ok()?;
-    Some(
-        text.lines()
-            .filter(|l| l.contains("Status:") || l.contains("Momentary freq"))
-            .collect::<Vec<_>>()
-            .join("|"),
-    )
+fn stream_status(text: &str) -> String {
+    text.lines()
+        .filter(|l| l.contains("Status:") || l.contains("Momentary freq"))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 /// Current stream rate from procfs, and whether a stream is running.
-fn proc_stream_rate(mock: bool) -> (Option<u32>, bool) {
+fn proc_stream_rate(mock: bool, stream0: Option<&str>) -> (Option<u32>, bool) {
     if mock {
         return (Some(48000), true);
     }
-    let Some(text) = proc_card().and_then(|p| fs::read_to_string(p.join("stream0")).ok()) else {
+    let Some(text) = stream0 else {
         return (None, false);
     };
     let running = text.contains("Status: Running");

@@ -69,6 +69,11 @@ struct Daemon {
     vdevs: vdev::Manager,
     clients: HashMap<u64, Client>,
     tray: Option<tray::TrayHandle>,
+    /// What the tray last showed, to skip updates it would not show
+    /// (the monitor volume changes several times a second while turning).
+    tray_shown: Option<tray::Shown>,
+    /// Whether the engine was last told that a window is watching.
+    watched: bool,
 }
 
 /// Run the daemon in the foreground until stopped.
@@ -159,6 +164,8 @@ pub fn run(mock: bool) -> Result<()> {
         vdevs: vdev::Manager::default(),
         clients: HashMap::new(),
         tray: tray::spawn(tx.clone()),
+        tray_shown: None,
+        watched: false,
     };
     log::info!("lD Mixer daemon listening on {}", path.display());
 
@@ -213,6 +220,18 @@ fn spawn_listener(listener: UnixListener, tx: Sender<Msg>) -> Result<()> {
 impl Daemon {
     /// Returns false when the daemon should exit.
     fn handle(&mut self, msg: Msg) -> bool {
+        let go_on = self.dispatch(msg);
+        // Clients come and go in many places (hello, hang-up, failed
+        // writes); a few entries are cheap to check after every message.
+        let watched = self.clients.values().any(|c| c.gui);
+        if watched != self.watched {
+            self.watched = watched;
+            self.engine.send(Command::Watch(watched));
+        }
+        go_on
+    }
+
+    fn dispatch(&mut self, msg: Msg) -> bool {
         match msg {
             Msg::Quit => return false,
             Msg::Tick => {
@@ -501,7 +520,11 @@ impl Daemon {
 
     fn update_tray(&mut self) {
         if let Some(t) = &self.tray {
-            t.update(self.device.as_ref().map(|d| d.model.clone()), self.monitor.clone());
+            let shown = tray::Shown::new(self.device.as_ref().map(|d| d.model.clone()), self.monitor.as_ref());
+            if self.tray_shown.as_ref() != Some(&shown) {
+                t.update(&shown);
+                self.tray_shown = Some(shown);
+            }
         }
     }
 
