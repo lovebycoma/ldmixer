@@ -74,9 +74,14 @@ struct Daemon {
 /// Run the daemon in the foreground until stopped.
 pub fn run(mock: bool) -> Result<()> {
     let path = ipc::socket_path();
-    if ipc::daemon_running() {
+    // The lock, not the socket, decides who runs: checking the socket and
+    // then binding it is racy (two daemons started together, e.g. one from
+    // autostart and one spawned by the GUI, both pass the check, and the
+    // second deletes the first one's socket while the first keeps the USB
+    // device). Held until this function returns.
+    let Some(_lock) = ipc::try_lock()? else {
         bail!("the lD Mixer daemon is already running");
-    }
+    };
     let _ = std::fs::remove_file(&path); // stale socket from a crash
     let listener = UnixListener::bind(&path).with_context(|| format!("binding {}", path.display()))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;

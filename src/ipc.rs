@@ -27,6 +27,37 @@ pub fn socket_path() -> PathBuf {
     }
 }
 
+/// The daemon's single-instance lock, next to the socket. Whoever holds
+/// an exclusive `flock` on it is the one daemon; the lock goes away with
+/// the process, so a crash never leaves it stuck.
+pub fn lock_path() -> PathBuf {
+    socket_path().with_extension("lock")
+}
+
+/// Take the single-instance lock without waiting; `None` when another
+/// daemon holds it. Keep the file open for as long as the lock is needed.
+pub fn try_lock() -> Result<Option<std::fs::File>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
+    let path = lock_path();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(file));
+    }
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        Ok(None)
+    } else {
+        Err(err).with_context(|| format!("locking {}", path.display()))
+    }
+}
+
 /// Identity of the connected device, as sent over the socket.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeviceSummary {

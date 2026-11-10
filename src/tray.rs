@@ -124,10 +124,14 @@ impl TrayHandle {
     }
 }
 
-/// Show the tray icon; `None` when the desktop has no tray.
+/// Show the tray icon; `None` only when the session bus is unreachable.
+///
+/// The daemon often starts before the tray host (autostart races the
+/// panel), so a missing StatusNotifierWatcher is not an error: the icon
+/// registers as soon as a watcher appears, and again if the panel restarts.
 pub fn spawn(tx: Sender<Msg>) -> Option<TrayHandle> {
     let tray = LdTray { tx, model: None, monitor: None };
-    match tray.spawn() {
+    match tray.assume_sni_available(true).spawn() {
         Ok(h) => Some(TrayHandle(h)),
         Err(e) => {
             log::warn!("no tray icon: {e}");
