@@ -33,15 +33,65 @@ pub const fn hex(c: u32) -> Rgb {
     )
 }
 
-const TRACK: Rgb = hex(0x0f1218);
-const TICK: Rgb = hex(0x5b6474);
-const TEXT: Rgb = hex(0x8b93a3);
 const CAP: Rgb = hex(0xdfe4ec);
 /// Fader cap body, a dark gray block like a console fader.
 const CAP_TOP: Rgb = hex(0x5a5f69);
 const CAP_MID: Rgb = hex(0x40444c);
 const CAP_BOTTOM: Rgb = hex(0x2c2f35);
-const METER_BG: Rgb = hex(0x161a22);
+
+/// Drawn colors that depend on the light/dark appearance.
+struct Palette {
+    /// Fader slot and the knob's unlit arc.
+    track: Rgb,
+    tick: Rgb,
+    text: Rgb,
+    meter_bg: Rgb,
+    /// Peak-hold line over the meter well.
+    peak: Rgb,
+}
+
+const DARK: Palette = Palette {
+    track: hex(0x0f1218),
+    tick: hex(0x5b6474),
+    text: hex(0x8b93a3),
+    meter_bg: hex(0x161a22),
+    peak: CAP,
+};
+const LIGHT: Palette = Palette {
+    track: hex(0xc4c9d2),
+    tick: hex(0x9299a6),
+    text: hex(0x5d6472),
+    meter_bg: hex(0xd3d7de),
+    peak: hex(0x3b404a),
+};
+
+/// Whether the widget sits in a dark theme, judged by its text color, so
+/// the drawn parts follow whatever GTK theme is in effect.
+fn is_dark(w: &impl IsA<gtk::Widget>) -> bool {
+    let c = w.as_ref().color();
+    0.2126 * c.red() + 0.7152 * c.green() + 0.0722 * c.blue() > 0.5
+}
+
+fn palette(w: &impl IsA<gtk::Widget>) -> &'static Palette {
+    if is_dark(w) { &DARK } else { &LIGHT }
+}
+
+/// Redraw a drawn widget when the appearance switches between light and
+/// dark, until the widget is destroyed.
+fn redraw_on_appearance(w: &impl IsA<gtk::Widget>) {
+    let weak = w.as_ref().downgrade();
+    let id = adw::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(w) = weak.upgrade() {
+            w.queue_draw();
+        }
+    });
+    let id = RefCell::new(Some(id));
+    w.as_ref().connect_destroy(move |_| {
+        if let Some(id) = id.take() {
+            adw::StyleManager::default().disconnect(id);
+        }
+    });
+}
 const METER_LOW: Rgb = hex(0x22c55e);
 const METER_MID: Rgb = hex(0xeab308);
 const METER_HIGH: Rgb = hex(0xef4444);
@@ -214,7 +264,7 @@ struct FaderInner {
     on_change: Callback,
     /// The parts that only change with the widget's size (meter wells,
     /// scale, slot), rasterized once per size into a GPU texture.
-    static_layer: RefCell<Option<(i32, i32, i32, gdk::Texture)>>,
+    static_layer: RefCell<Option<(i32, i32, i32, bool, gdk::Texture)>>,
 }
 
 /// A vertical fader with a dB scale and one meter per channel.
@@ -335,6 +385,7 @@ impl Fader {
     fn install(&self) {
         let me = self.clone();
         self.area.set_draw_func(move |snap, w, h| me.draw(snap, w, h));
+        redraw_on_appearance(&self.area);
 
         let drag = gtk::GestureDrag::new();
         let me = self.clone();
@@ -400,9 +451,10 @@ impl Fader {
         let ypos = |p: f64| fader_top() + (1.0 - p) * len;
         let channels = self.inner.meters.borrow().len();
         let (meter_x0, labels_right, slot_x) = layout(w, channels);
+        let pal = palette(&self.area);
         for i in 0..channels {
             let x = meter_x0 + i as f64 * (meter_w() + meter_gap());
-            set(cr, METER_BG);
+            set(cr, pal.meter_bg);
             rounded_rect(cr, x, fader_top(), meter_w(), len, 1.5);
             let _ = cr.fill();
         }
@@ -410,31 +462,33 @@ impl Fader {
         cr.set_font_size(em(0.58));
         for db in SCALE_DB {
             let y = ypos(protocol::db_to_fader(Some(db))).round() + 0.5;
-            set(cr, TICK);
+            set(cr, pal.tick);
             cr.set_line_width(1.0);
             cr.move_to(labels_right + group_gap() * 0.33, y);
             cr.line_to(labels_right + group_gap() * 0.83, y);
             let _ = cr.stroke();
             let text = format!("{}", db.abs() as i32);
             if let Ok(ext) = cr.text_extents(&text) {
-                set(cr, TEXT);
+                set(cr, pal.text);
                 cr.move_to(labels_right - ext.width() - ext.x_bearing(), y + ext.height() / 2.0);
                 let _ = cr.show_text(&text);
             }
         }
-        set(cr, TRACK);
+        set(cr, pal.track);
         let sw = slot_w();
         rounded_rect(cr, slot_x - sw / 2.0, fader_top() - sw, sw, len + 2.0 * sw, sw / 2.0);
         let _ = cr.fill();
     }
 
-    /// The static layer as a texture, re-rasterized only when the size or
-    /// scale changes; the renderer keeps it on the GPU between frames.
+    /// The static layer as a texture, re-rasterized only when the size,
+    /// scale or appearance changes; the renderer keeps it on the GPU between frames.
     fn static_texture(&self, w: f64, h: f64) -> Option<gdk::Texture> {
         let scale = self.area.scale_factor().max(1);
         let (wi, hi) = (w.ceil() as i32, h.ceil() as i32);
+        let dark = is_dark(&self.area);
         let mut cache = self.inner.static_layer.borrow_mut();
-        let fresh = !matches!(&*cache, Some((cw, ch, cs, _)) if *cw == wi && *ch == hi && *cs == scale);
+        let fresh =
+            !matches!(&*cache, Some((cw, ch, cs, cd, _)) if *cw == wi && *ch == hi && *cs == scale && *cd == dark);
         if fresh {
             *cache = (|| {
                 let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, wi * scale, hi * scale).ok()?;
@@ -454,10 +508,10 @@ impl Fader {
                     &glib::Bytes::from_owned(data),
                     stride,
                 );
-                Some((wi, hi, scale, tex.upcast::<gdk::Texture>()))
+                Some((wi, hi, scale, dark, tex.upcast::<gdk::Texture>()))
             })();
         }
-        cache.as_ref().map(|(_, _, _, t)| t.clone())
+        cache.as_ref().map(|(_, _, _, _, t)| t.clone())
     }
 
     fn draw(&self, snap: &gtk::Snapshot, w: f64, h: f64) {
@@ -498,7 +552,7 @@ impl Fader {
             let p = peaks[i].0;
             if p > 0.01 {
                 let y = (fader_top() + (1.0 - p as f64) * len).round();
-                snap.append_color(&rgba(if p > 0.95 { METER_HIGH } else { CAP }, 1.0), &rect(x, y, meter_w(), 1.0));
+                snap.append_color(&rgba(if p > 0.95 { METER_HIGH } else { palette(&self.area).peak }, 1.0), &rect(x, y, meter_w(), 1.0));
             }
         }
         drop((meters, peaks));
@@ -638,6 +692,7 @@ impl Knob {
     fn install(&self) {
         let me = self.clone();
         self.area.set_draw_func(move |_, cr, w, h| me.draw(cr, w as f64, h as f64));
+        redraw_on_appearance(&self.area);
 
         let drag = gtk::GestureDrag::new();
         let me = self.clone();
@@ -698,8 +753,9 @@ impl Knob {
         let v = self.value();
         let angle = |p: f64| ARC_START + p * ARC_SWEEP;
 
+        let pal = palette(&self.area);
         cr.set_line_cap(cairo::LineCap::Round);
-        set(cr, TICK);
+        set(cr, pal.tick);
         cr.set_line_width(1.0);
         for i in 0..=10 {
             let a = angle(i as f64 / 10.0);
@@ -711,7 +767,7 @@ impl Knob {
         let (left, right) = if self.inner.bipolar { ("L", "R") } else { ("−∞", "0") };
         cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
         cr.set_font_size((outer * 0.3).clamp(em(0.55), em(0.75)));
-        set(cr, TEXT);
+        set(cr, pal.text);
         for (text, a) in [(left, angle(0.0)), (right, angle(1.0))] {
             if let Ok(ext) = cr.text_extents(text) {
                 let (x, y) = (cx + a.cos() * outer, cy + a.sin() * outer);
@@ -723,7 +779,7 @@ impl Knob {
         cr.new_path();
 
         cr.set_line_width(ring);
-        set(cr, TRACK);
+        set(cr, pal.track);
         cr.arc(cx, cy, r - ring / 2.0, angle(0.0), angle(1.0));
         let _ = cr.stroke();
 

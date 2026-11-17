@@ -108,6 +108,39 @@ fn mix_color_css(st: &MixerState) -> String {
         .collect()
 }
 
+thread_local! {
+    /// A fresh copy of the user's `gtk.css` after it changed on disk.
+    static USER_THEME: gtk::CssProvider = gtk::CssProvider::new();
+}
+
+/// Reload the user's GTK theme when its files change. GTK reads
+/// `~/.config/gtk-4.0/gtk.css` only at startup, so a desktop that rewrites
+/// its palette there on a light/dark switch would not reach an open window.
+/// Reading only; the files are never written.
+fn watch_user_theme() {
+    let dir = glib::user_config_dir().join("gtk-4.0");
+    let Ok(monitor) = gio::File::for_path(&dir).monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+    else {
+        return;
+    };
+    let pending = Rc::new(Cell::new(false));
+    monitor.connect_changed(move |_, _, _, _| {
+        // A theme switch rewrites several files; reload once they settle.
+        if pending.replace(true) {
+            return;
+        }
+        let (pending, css) = (pending.clone(), dir.join("gtk.css"));
+        glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || {
+            pending.set(false);
+            if css.exists() {
+                USER_THEME.with(|p| p.load_from_path(&css));
+            }
+        });
+    });
+    // Watch for the lifetime of the process.
+    std::mem::forget(monitor);
+}
+
 /// Start the GUI. Blocks until the window closes.
 pub fn run(mock: bool) -> glib::ExitCode {
     let mut flags = gio::ApplicationFlags::empty();
@@ -117,7 +150,6 @@ pub fn run(mock: bool) -> glib::ExitCode {
     }
     let gapp = adw::Application::builder().application_id(APP_ID).flags(flags).build();
     gapp.connect_startup(|_| {
-        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
         let provider = gtk::CssProvider::new();
         provider.load_from_string(CSS);
         widgets::init_em();
@@ -138,6 +170,11 @@ pub fn run(mock: bool) -> glib::ExitCode {
                 &provider,
                 gtk::STYLE_PROVIDER_PRIORITY_USER + 100,
             );
+            // Above the user's theme as GTK loaded it, below the app CSS.
+            USER_THEME.with(|p| {
+                gtk::style_context_add_provider_for_display(&display, p, gtk::STYLE_PROVIDER_PRIORITY_USER + 1);
+            });
+            watch_user_theme();
         }
     });
     gapp.connect_activate(move |gapp| {
