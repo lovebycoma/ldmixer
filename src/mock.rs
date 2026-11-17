@@ -92,9 +92,9 @@ impl ControlIo for MockDevice {
                 _ => 0.0,
             };
             if base > 0.0 {
-                // int16 in 1/256 dB, like the hardware.
+                // Linear peak amplitude as uint16, like the hardware.
                 let db = -60.0 * (1.0 - base.clamp(0.0, 1.0));
-                let raw = ((db * 256.0) as i16).to_le_bytes();
+                let raw = ((10f32.powf(db / 20.0) * u16::MAX as f32) as u16).to_le_bytes();
                 out[node * 2] = raw[0];
                 out[node * 2 + 1] = raw[1];
             }

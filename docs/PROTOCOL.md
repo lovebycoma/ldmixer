@@ -32,7 +32,7 @@ Routing codes on the iD24 follow BiD's ear-verified table: Main `0x25/0x26`, Alt
 
 ## Measured by lD Mixer
 
-**Meters.** GET_MEM on `0x3c` offset 0 returns two bytes per node, and the pair is one int16 in 1/256 dB, the same scale as the level controls (music on DAW 1/2 read `0xedd0` = -18.2 dB). Digital silence reads `0x0000`. Earlier projects read only the first byte.
+**Meters.** GET_MEM on `0x3c` offset 0 returns two bytes per node, and the pair is one little-endian uint16 holding the linear peak amplitude, `0xffff` = full scale, so the level is `20 * log10(raw / 65535)` dBFS. Digital silence reads `0x0000`. Checked against a recording of the same stream: over 5 s the meter's maximum was 25767 while the largest 16-bit sample was 12884, exactly half, and the medians matched the same way. An earlier version of lD Mixer read the pair as int16 in 1/256 dB like the level controls, which showed every meter at full scale. Earlier projects read only the first byte.
 
 **Loopback works.** Outputs 10/11 of the routing unit are the loopback pair: whatever they are routed to arrives in the computer as capture channels 11/12 (`AUX10/AUX11` in PipeWire). Measured with Main routed there: about -9 dBFS RMS on both channels while music played. The loopback is not affected by the monitor volume (it read the same level with the monitor at -40.8 dB). BiD had reported it silent.
 

@@ -125,6 +125,12 @@ pub fn db_to_fader(db: Option<f32>) -> f64 {
     }
 }
 
+/// A raw meter value in dBFS (`None` = silence). The meters are linear peak
+/// amplitude, unlike the level controls: 65535 is full scale and 0 silence.
+pub fn meter_to_db(raw: u16) -> Option<f32> {
+    (raw != 0).then(|| 20.0 * (raw as f32 / u16::MAX as f32).log10())
+}
+
 /// Format a level for display, e.g. "-12.0 dB" or "-inf".
 pub fn format_db(db: Option<f32>) -> String {
     match db {
@@ -444,6 +450,18 @@ pub fn model_name(product_id: u16) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meters_are_linear_amplitude() {
+        assert_eq!(meter_to_db(0), None);
+        assert_eq!(meter_to_db(u16::MAX), Some(0.0));
+        // Half scale is about -6 dB; the old int16 1/256 dB reading of the
+        // same bytes was far above 0 dB.
+        let half = meter_to_db(0x8000).unwrap();
+        assert!((half + 6.02).abs() < 0.01, "{half}");
+        let music = meter_to_db(0x2c98).unwrap();
+        assert!((music + 15.2).abs() < 0.1, "{music}");
+    }
 
     #[test]
     fn level_round_trip() {

@@ -99,8 +99,8 @@ pub trait ControlIo: Send {
 
     /// Input meters, one level per mixer node in dBFS (`None` = silence).
     ///
-    /// Measured on an iD24: each node is a little-endian int16 in 1/256 dB,
-    /// the same scale as the level controls, and digital silence reads 0.
+    /// Measured on an iD24: each node is a little-endian uint16 holding the
+    /// linear peak amplitude, 65535 = full scale (see `protocol::meter_to_db`).
     fn read_input_meters(&self, nodes: usize) -> Result<Vec<Option<f32>>> {
         let buf = self.get_mem(entity::MIXER, 0, nodes * 2)?;
         if buf.len() < nodes * 2 {
@@ -108,8 +108,7 @@ pub trait ControlIo: Send {
         }
         Ok((0..nodes)
             .map(|i| {
-                let raw = i16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]);
-                (raw != 0 && raw != protocol::RAW_MUTE).then(|| raw as f32 / 256.0)
+                protocol::meter_to_db(u16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]))
             })
             .collect())
     }
