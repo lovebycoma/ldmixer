@@ -40,6 +40,8 @@ Routing codes on the iD24 follow BiD's ear-verified table: Main `0x25/0x26`, Alt
 
 **Feature unit `0x0c` reads are not trustworthy.** Channels that were never written read `0x8000` (-inf), including channel 8, which does not exist and rejects writes, while channel 7 rejects writes yet reads `0x0000`. After a write, a channel reads back the written value. Do not conclude anything from a read of this unit before writing it.
 
-**Feature unit `0x0c` writes are asymmetric.** With Main on the loopback, setting `0x0c` channel 2 to -inf silenced the right loopback channel, and -20 dB lowered it by 20 dB. Muting channels 0, 1 and 3-6 one at a time changed neither loopback channel. This matches the asymmetry the audient-id24-dkms project describes for ALSA's "Speaker Playback Volume" (the same unit). lD Mixer leaves this unit alone; on the test device all channels are at 0 dB, which is neutral.
+**Feature unit `0x0c` writes are asymmetric.** With Main on the loopback, setting `0x0c` channel 2 to -inf silenced the right loopback channel, and -20 dB lowered it by 20 dB. Muting channels 0, 1 and 3-6 one at a time changed neither loopback channel. This matches the asymmetry the audient-id24-dkms project describes for ALSA's "Speaker Playback Volume" (the same unit). Unwritten channels play at 0 dB, which is neutral.
+
+**The kernel mutes Main R on resume.** snd-usb-audio exposes `0x0c` channels 1-4 as "Monitor Mix Playback Volume", caches the junk `0x8000` it read and writes it back when the system resumes from sleep. After a suspend only the left channel played, restarting lD Mixer did not help and a replug did. Writing 0 dB to channel 2 restored the right channel, so lD Mixer writes 0 dB to channels 1-4 on every connect (a resume makes it reconnect) and otherwise leaves the unit alone.
 
 **Optical out format** has been seen to read 255, which is neither ADAT nor S/PDIF; lD Mixer then shows nothing rather than guessing.

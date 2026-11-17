@@ -404,6 +404,14 @@ impl Engine {
             Ok(dev) => {
                 let info = dev.info().clone();
                 log::warn!("connected to {} on interface {}", info.profile.name, info.interface);
+                // The kernel's resume writes -inf to the output feature unit,
+                // which leaves only the left channel audible until a replug.
+                // 0 dB is what an untouched unit plays at.
+                for ch in entity::OUTPUT_FU_CHANNELS {
+                    if let Err(e) = dev.set_i16(entity::OUTPUT_FU, entity::OUTPUT_FU_VOLUME, ch, 0) {
+                        log::warn!("output feature unit channel {ch}: {e}");
+                    }
+                }
                 self.dev = Some(dev);
                 self.card = None;
                 self.last_error = None;

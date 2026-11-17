@@ -60,7 +60,7 @@ Details and sources in `docs/PROTOCOL.md`. Verified on an iD24 (firmware 1.12):
 - Mixer: 16 nodes (Mic 1-2, Digi 1-8, DAW 1-6) x 6 sends, `cell = node*6 + bus*2 + side`. Levels are int16 in 1/256 dB, `0x8000` = silence. Matrix and routing answer GET, so a first start can read them.
 - Routing codes follow BiD's ear-verified table: Main `0x25/26`, Alt `0x27/28`, Cue A `0x1e/1f`, Cue B `0x20/21`, DAW n `n`, input n `0x10+n`. Outputs 10/11 are the **loopback**; it comes back as capture channels 11/12 and works (BiD reported it silent).
 - **Meters**: GET_MEM offset 0, one int16 (1/256 dB) per node, 0 = silence.
-- **Feature unit 0x0c**: reads are junk (unwritten channels read -inf); writing channel 2 attenuates Main R. lD Mixer must leave it alone.
+- **Feature unit 0x0c**: reads are junk (unwritten channels read -inf); writing channel 2 attenuates Main R. snd-usb-audio exposes channels 1-4 as "Monitor Mix Playback Volume", caches the junk -inf and writes it back on system resume, which muted Main R until a replug. The engine therefore writes 0 dB to channels 1-4 on every connect (a resume reconnects) and otherwise leaves the unit alone.
 - The interface stores what it is sent (routing survives power cycles), so uninstalling lD Mixer does not revert the hardware.
 - The "no sound" incident during development was the owner's front-panel knob, not software; check the knob first.
 

@@ -24,8 +24,15 @@ pub mod entity {
     pub const OPTICAL_IN: u8 = 0x01;
     /// Input feature unit: phase invert (selector 0x0d, channel 1..n).
     pub const INPUT: u8 = 0x0b;
-    /// Output feature unit (volume, selector 0x02). Left alone by lD Mixer.
+    /// Output feature unit (volume, selector 0x02). Not part of the mix; lD
+    /// Mixer only resets it to 0 dB on connect (see `OUTPUT_FU_CHANNELS`).
     pub const OUTPUT_FU: u8 = 0x0c;
+    /// Volume selector of `OUTPUT_FU`.
+    pub const OUTPUT_FU_VOLUME: u8 = 0x02;
+    /// Channels of `OUTPUT_FU` that snd-usb-audio exposes as "Monitor Mix
+    /// Playback Volume". The kernel caches their junk -inf reads and writes
+    /// them back when the system resumes, which mutes Main R (channel 2).
+    pub const OUTPUT_FU_CHANNELS: std::ops::RangeInclusive<u8> = 1..=4;
     /// Optical output format (selector 0x01): 0 = ADAT, 1 = S/PDIF.
     pub const OPTICAL_OUT: u8 = 0x14;
     /// Sample rate (selector 0x01, int32 Hz).
